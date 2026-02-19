@@ -249,9 +249,11 @@ function generateResult(scenario: string, _hash: number): DamageAnalysisResult {
   };
 }
 
-interface DmgOpts { struct?: boolean; mech?: boolean; safety?: boolean; rep: DamageDetection['estimatedRepair']; x?: number; y?: number; }
+interface DmgOpts { struct?: boolean; mech?: boolean; safety?: boolean; rep: DamageDetection['estimatedRepair']; x?: number; y?: number; w?: number; h?: number; }
 
 function mkDmg(type: DamageType, sev: DamageSeverity, part: VehiclePart, zone: VehicleZone, side: DamageDetection['side'], desc: string, conf: number, o: DmgOpts): DamageDetection {
+  // Vary bounding box size based on severity
+  const baseSize = sev === 'severe' ? 0.22 : sev === 'moderate' ? 0.16 : 0.11;
   return {
     id: `dmg-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
     type, severity: sev, part, zone, side, confidence: conf, description: desc,
@@ -259,7 +261,12 @@ function mkDmg(type: DamageType, sev: DamageSeverity, part: VehiclePart, zone: V
     affectsStructure: o.struct || false,
     affectsMechanical: o.mech || false,
     affectsSafety: o.safety || sev === 'severe' || sev === 'total_loss',
-    boundingBox: o.x !== undefined ? { x: o.x, y: o.y || 0.5, width: 0.12, height: 0.12 } : undefined,
+    boundingBox: o.x !== undefined ? { 
+      x: o.x, 
+      y: o.y || 0.5, 
+      width: o.w || baseSize + (Math.random() * 0.04), 
+      height: o.h || baseSize + (Math.random() * 0.04) 
+    } : undefined,
   };
 }
 
