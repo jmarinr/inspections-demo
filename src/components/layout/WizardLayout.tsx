@@ -92,15 +92,15 @@ export const WizardLayout: React.FC<WizardLayoutProps> = ({ children }) => {
                 key={step.id}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs transition-colors"
                 style={{
-                  backgroundColor: isActive ? 'rgba(236, 72, 153, 0.1)' : isCompleted ? 'rgba(16, 185, 129, 0.1)' : 'var(--bg-input)',
-                  color: isActive ? 'var(--hk-primary)' : isCompleted ? '#34d399' : 'var(--text-muted)',
+                  backgroundColor: isActive ? 'var(--hk-primary-surface)' : isCompleted ? 'var(--hk-success-surface)' : 'var(--bg-input)',
+                  color: isActive ? 'var(--hk-primary)' : isCompleted ? 'var(--hk-success)' : 'var(--text-muted)',
                   border: isActive ? '1px solid var(--hk-primary)' : '1px solid transparent',
                 }}
               >
                 <span 
                   className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-medium"
                   style={{
-                    backgroundColor: isActive ? 'var(--hk-primary)' : isCompleted ? '#10b981' : 'var(--border-color)',
+                    backgroundColor: isActive ? 'var(--hk-primary)' : isCompleted ? 'var(--hk-success)' : 'var(--border-color)',
                     color: isActive || isCompleted ? 'white' : 'var(--text-muted)',
                   }}
                 >

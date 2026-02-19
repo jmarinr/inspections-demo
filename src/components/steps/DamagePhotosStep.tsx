@@ -134,8 +134,8 @@ const DamageOverlay: React.FC<DamageOverlayProps> = ({ imageUrl, damages, select
       {/* AI Badge overlay */}
       <div className="absolute top-3 right-3 z-30">
         <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[10px] font-semibold shadow-lg" 
-          style={{ backgroundColor: 'rgba(15,10,31,0.85)', border: '1px solid rgba(236,72,153,0.4)', color: 'white', backdropFilter: 'blur(8px)' }}>
-          <Sparkles className="w-3 h-3" style={{ color: '#ec4899' }} />
+          style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--hk-primary)', color: 'white', backdropFilter: 'blur(8px)' }}>
+          <Sparkles className="w-3 h-3" style={{ color: 'var(--hk-primary)' }} />
           IA Detección
         </div>
       </div>
@@ -143,7 +143,7 @@ const DamageOverlay: React.FC<DamageOverlayProps> = ({ imageUrl, damages, select
       {/* Damage count overlay */}
       <div className="absolute bottom-3 left-3 z-30">
         <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[10px] font-bold shadow-lg"
-          style={{ backgroundColor: 'rgba(15,10,31,0.85)', border: '1px solid rgba(255,255,255,0.15)', color: 'white', backdropFilter: 'blur(8px)' }}>
+          style={{ backgroundColor: 'var(--bg-card)', border: '1px solid rgba(255,255,255,0.15)', color: 'white', backdropFilter: 'blur(8px)' }}>
           <Target className="w-3 h-3 text-red-400" />
           {damages.length} {damages.length === 1 ? 'daño' : 'daños'} detectados
         </div>
@@ -353,7 +353,7 @@ export const DamagePhotosStep: React.FC = () => {
         <Card className="animate-fade-in">
           <div className="flex items-center gap-4">
             <div className="relative">
-              <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: 'rgba(236,72,153,0.15)' }}>
+              <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: 'var(--hk-primary-surface)' }}>
                 <Target className="w-7 h-7 animate-pulse" style={{ color: 'var(--hk-primary)' }} />
               </div>
               <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center" style={{ backgroundColor: 'var(--hk-primary)' }}>

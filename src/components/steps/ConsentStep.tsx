@@ -56,17 +56,17 @@ export const ConsentStep: React.FC = () => {
     <div className="space-y-6 animate-slide-up">
       <Card>
         <h2 className="text-xl font-bold text-white mb-2">Consentimiento</h2>
-        <p className="text-dark-400 mb-6">
+        <p className="text-[var(--text-muted)] mb-6">
           Lee y acepta los términos para continuar
         </p>
 
         {/* Terms Box */}
-        <div className="bg-dark-900/50 rounded-xl p-4 mb-6 max-h-64 overflow-y-auto">
+        <div className="bg-[var(--bg-secondary)] rounded-xl p-4 mb-6 max-h-64 overflow-y-auto">
           <h3 className="font-semibold text-white mb-4">
             Términos de uso del servicio de auto-inspección
           </h3>
           
-          <p className="text-dark-300 mb-4">
+          <p className="text-[var(--text-secondary)] mb-4">
             Al utilizar este servicio, autorizas a HenkanCX a:
           </p>
 
@@ -74,13 +74,13 @@ export const ConsentStep: React.FC = () => {
             {termsContent.map((term, index) => (
               <li key={index} className="flex items-start gap-3">
                 {term.icon}
-                <span className="text-dark-300">{term.text}</span>
+                <span className="text-[var(--text-secondary)]">{term.text}</span>
               </li>
             ))}
           </ul>
 
-          <div className="mt-6 pt-4 border-t border-dark-700">
-            <p className="text-sm text-dark-400">
+          <div className="mt-6 pt-4 border-t border-[var(--border-color)]">
+            <p className="text-sm text-[var(--text-muted)]">
               Tus datos personales están protegidos de acuerdo con nuestra política 
               de privacidad y las leyes de protección de datos aplicables en tu país.
               La información será eliminada automáticamente después de 90 días de 
@@ -90,7 +90,7 @@ export const ConsentStep: React.FC = () => {
 
           <div className="mt-4">
             <h4 className="font-medium text-white mb-2">Declaración de veracidad</h4>
-            <p className="text-sm text-dark-400">
+            <p className="text-sm text-[var(--text-muted)]">
               Declaro bajo protesta de decir verdad que la información y fotografías 
               que proporcionaré son verídicas y corresponden al estado actual del 
               vehículo y las circunstancias del accidente. Entiendo que proporcionar 
@@ -127,11 +127,11 @@ export const ConsentStep: React.FC = () => {
             </Button>
           </div>
           
-          <p className="text-sm text-dark-400 mb-4">
+          <p className="text-sm text-[var(--text-muted)] mb-4">
             Firma en el recuadro para confirmar tu consentimiento
           </p>
 
-          <div className="border-2 border-dashed border-dark-500 rounded-xl overflow-hidden bg-white">
+          <div className="border-2 border-dashed border-[var(--border-color)] rounded-xl overflow-hidden bg-white">
             <SignatureCanvas
               ref={signatureRef}
               onEnd={handleSignatureEnd}
@@ -145,7 +145,7 @@ export const ConsentStep: React.FC = () => {
           </div>
 
           {!hasSignature && (
-            <p className="text-sm text-dark-400 mt-2 text-center">
+            <p className="text-sm text-[var(--text-muted)] mt-2 text-center">
               Dibuja tu firma arriba
             </p>
           )}

@@ -42,7 +42,7 @@ export const StartStep: React.FC = () => {
             <h2 className="text-lg font-bold" style={{ color: 'var(--hk-primary)' }}>
               HK Inspect
             </h2>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>by HenkanCX</p>
+            <p className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>by HenkanCX</p>
           </div>
         </div>
 
@@ -110,7 +110,7 @@ export const StartStep: React.FC = () => {
                     onClick={() => setAccidentType(type.value)}
                     className="p-3 rounded-lg text-left transition-colors"
                     style={{
-                      backgroundColor: accidentType === type.value ? 'rgba(236, 72, 153, 0.1)' : 'var(--bg-input)',
+                      backgroundColor: accidentType === type.value ? 'var(--hk-primary-surface)' : 'var(--bg-input)',
                       border: accidentType === type.value ? '1px solid var(--hk-primary)' : '1px solid var(--border-color)',
                     }}
                   >

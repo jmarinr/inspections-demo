@@ -127,11 +127,11 @@ export const SceneStep: React.FC = () => {
         </h3>
 
         {/* GPS Status */}
-        <div className="flex items-center gap-3 mb-4 p-3 bg-dark-900/50 rounded-lg">
+        <div className="flex items-center gap-3 mb-4 p-3 bg-[var(--bg-secondary)] rounded-lg">
           {isGettingLocation ? (
             <>
               <Loader2 className="w-5 h-5 text-primary-400 animate-spin" />
-              <span className="text-dark-300">Obteniendo ubicación GPS...</span>
+              <span className="text-[var(--text-secondary)]">Obteniendo ubicación GPS...</span>
             </>
           ) : sceneData.latitude && sceneData.longitude ? (
             <>
@@ -139,7 +139,7 @@ export const SceneStep: React.FC = () => {
                 <MapPin className="w-4 h-4 text-white" />
               </div>
               <div className="flex-1">
-                <p className="text-sm text-dark-300">
+                <p className="text-sm text-[var(--text-secondary)]">
                   {sceneData.latitude.toFixed(6)}, {sceneData.longitude.toFixed(6)}
                 </p>
               </div>
@@ -147,8 +147,8 @@ export const SceneStep: React.FC = () => {
             </>
           ) : (
             <>
-              <MapPin className="w-5 h-5 text-dark-400" />
-              <span className="text-dark-400">Sin ubicación GPS</span>
+              <MapPin className="w-5 h-5 text-[var(--text-muted)]" />
+              <span className="text-[var(--text-muted)]">Sin ubicación GPS</span>
               <Button variant="ghost" size="sm" onClick={getCurrentLocation}>
                 Reintentar
               </Button>
@@ -177,7 +177,7 @@ export const SceneStep: React.FC = () => {
           <Camera className="w-5 h-5 text-primary-400" />
           Fotos del lugar
         </h3>
-        <p className="text-sm text-dark-400 mb-4">
+        <p className="text-sm text-[var(--text-muted)] mb-4">
           Toma fotos panorámicas del lugar del accidente, señales de tránsito, 
           marcas en el pavimento, y cualquier elemento relevante.
         </p>
@@ -202,10 +202,10 @@ export const SceneStep: React.FC = () => {
           ))}
           <button
             onClick={() => inputRef.current?.click()}
-            className="bg-dark-800 border-2 border-dashed border-dark-500 rounded-xl aspect-square flex flex-col items-center justify-center gap-2 hover:border-primary-500 transition-all"
+            className="bg-[var(--bg-input)] border-2 border-dashed border-[var(--border-color)] rounded-xl aspect-square flex flex-col items-center justify-center gap-2 hover:border-[var(--hk-primary)] transition-all"
           >
-            <Camera className="w-8 h-8 text-dark-400" />
-            <span className="text-sm text-dark-400">Agregar foto</span>
+            <Camera className="w-8 h-8 text-[var(--text-muted)]" />
+            <span className="text-sm text-[var(--text-muted)]">Agregar foto</span>
           </button>
         </div>
       </Card>

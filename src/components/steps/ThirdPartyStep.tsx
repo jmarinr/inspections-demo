@@ -82,12 +82,12 @@ export const ThirdPartyStep: React.FC = () => {
       {/* Third Party Toggle */}
       <Card>
         <div className="flex items-center gap-4">
-          <div className="p-3 bg-dark-700 rounded-full">
+          <div className="p-3 bg-[var(--bg-input)] rounded-full">
             <Users className="w-6 h-6 text-primary-400" />
           </div>
           <div className="flex-1">
             <h3 className="font-semibold text-white">¿Hubo un tercero involucrado?</h3>
-            <p className="text-sm text-dark-400">
+            <p className="text-sm text-[var(--text-muted)]">
               Otro vehículo, peatón o propiedad afectada
             </p>
           </div>
@@ -96,8 +96,8 @@ export const ThirdPartyStep: React.FC = () => {
               onClick={() => handleThirdPartyToggle(true)}
               className={`px-4 py-2 rounded-lg font-medium transition-all ${
                 hasThirdParty
-                  ? 'bg-primary-500 text-white'
-                  : 'bg-dark-700 text-dark-300 hover:bg-dark-600'
+                  ? 'bg-[var(--hk-primary)] text-white'
+                  : 'bg-[var(--bg-input)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
               }`}
             >
               Sí
@@ -106,8 +106,8 @@ export const ThirdPartyStep: React.FC = () => {
               onClick={() => handleThirdPartyToggle(false)}
               className={`px-4 py-2 rounded-lg font-medium transition-all ${
                 !hasThirdParty
-                  ? 'bg-primary-500 text-white'
-                  : 'bg-dark-700 text-dark-300 hover:bg-dark-600'
+                  ? 'bg-[var(--hk-primary)] text-white'
+                  : 'bg-[var(--bg-input)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
               }`}
             >
               No
@@ -164,7 +164,7 @@ export const ThirdPartyStep: React.FC = () => {
 
               {/* ID Photo (optional) */}
               <div>
-                <label className="block text-sm font-medium text-dark-200 mb-2">
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
                   Foto de identificación (opcional)
                 </label>
                 <ImageUploader
@@ -187,7 +187,7 @@ export const ThirdPartyStep: React.FC = () => {
             <div className="space-y-4">
               {/* Plate Photo */}
               <div>
-                <label className="block text-sm font-medium text-dark-200 mb-2">
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
                   Foto de la placa del tercero
                 </label>
                 <ImageUploader
@@ -247,7 +247,7 @@ export const ThirdPartyStep: React.FC = () => {
               <Camera className="w-5 h-5 text-primary-400" />
               Fotos de daños del vehículo tercero
             </h3>
-            <p className="text-sm text-dark-400 mb-4">
+            <p className="text-sm text-[var(--text-muted)] mb-4">
               Documenta los daños visibles del vehículo del tercero
             </p>
 

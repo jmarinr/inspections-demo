@@ -71,18 +71,35 @@ export function useOCR(): UseOCRResult {
     setRawText(null);
 
     try {
-      // Process front image
-      console.log('[OCR] Processing front image...');
+      // Try Claude API first (much better for ID extraction)
+      try {
+        console.log('[OCR] Trying Claude API for ID extraction...');
+        setProgress(20);
+        const claudeResult = await extractWithClaude(frontImage, backImage, country);
+        if (claudeResult && (claudeResult.fullName || claudeResult.idNumber)) {
+          console.log('[OCR] Claude API success:', claudeResult);
+          setProgress(100);
+          setRawText('(Extraído con IA avanzada)');
+          return {
+            data: claudeResult,
+            confidence: 0.95,
+            rawText: '(Extraído con IA avanzada)',
+          };
+        }
+      } catch (claudeErr) {
+        console.warn('[OCR] Claude API unavailable, falling back to Tesseract:', claudeErr);
+      }
+
+      // Fallback: Tesseract OCR
+      console.log('[OCR] Processing front image with Tesseract...');
       const frontResult = await processImage(frontImage);
       
-      // Process back image if provided
       let backResult: OCRResult | null = null;
       if (backImage) {
         console.log('[OCR] Processing back image...');
         backResult = await processImage(backImage);
       }
 
-      // Combine and parse the extracted text
       const combinedText = `${frontResult.text}\n${backResult?.text || ''}`;
       setRawText(combinedText);
       console.log('[OCR] Combined text:', combinedText);
@@ -90,14 +107,13 @@ export function useOCR(): UseOCRResult {
       const parsedData = parseIdDocument(combinedText, country);
       console.log('[OCR] Parsed data:', parsedData);
       
-      // Calculate overall confidence
       const confidence = backResult
         ? (frontResult.confidence + backResult.confidence) / 2
         : frontResult.confidence;
 
       return {
         data: parsedData,
-        confidence: confidence / 100, // Normalize to 0-1
+        confidence: confidence / 100,
         rawText: combinedText,
       };
     } catch (err) {
@@ -116,6 +132,69 @@ export function useOCR(): UseOCRResult {
     rawText,
     processImage,
     extractIdData,
+  };
+}
+
+// ===== CLAUDE API OCR EXTRACTION =====
+async function extractWithClaude(
+  frontImage: string, backImage: string | undefined, country: string
+): Promise<ExtractedIdData | null> {
+  const countryNames: Record<string, string> = {
+    PA: 'Panamá', MX: 'México', CR: 'Costa Rica', CO: 'Colombia', PR: 'Puerto Rico'
+  };
+
+  const images: Array<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } }> = [];
+
+  const addImage = (imgData: string) => {
+    const mt = imgData.match(/^data:(image\/\w+);base64,/);
+    images.push({
+      type: 'image',
+      source: { type: 'base64', media_type: mt ? mt[1] : 'image/jpeg', data: imgData.replace(/^data:image\/\w+;base64,/, '') }
+    });
+  };
+
+  addImage(frontImage);
+  if (backImage) addImage(backImage);
+
+  const prompt = `Extrae los datos de este documento de identidad de ${countryNames[country] || 'Latinoamérica'}.
+
+Responde SOLO con JSON válido (sin markdown, sin backticks):
+{
+  "fullName": "nombre completo tal como aparece",
+  "idNumber": "número de cédula/identidad con formato correcto (ej: 8-203-1365 para Panamá)",
+  "birthDate": "YYYY-MM-DD",
+  "expiryDate": "YYYY-MM-DD",
+  "gender": "M o F"
+}
+
+Si no puedes leer algún campo, usa cadena vacía "". Lee EXACTAMENTE lo que dice el documento.`;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 500,
+      messages: [{
+        role: 'user',
+        content: [...images, { type: 'text' as const, text: prompt }]
+      }]
+    })
+  });
+
+  if (!response.ok) throw new Error(`API ${response.status}`);
+
+  const data = await response.json();
+  const text = data.content?.find((c: any) => c.type === 'text')?.text || '';
+  const json = JSON.parse(text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim());
+
+  return {
+    fullName: json.fullName || '',
+    idNumber: json.idNumber || '',
+    birthDate: json.birthDate || '',
+    expiryDate: json.expiryDate || '',
+    gender: json.gender || undefined,
+    nationality: countryNames[country] ? `${countryNames[country]}` : undefined,
   };
 }
 

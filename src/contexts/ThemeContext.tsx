@@ -15,8 +15,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // Check localStorage first
     const saved = localStorage.getItem('app-theme');
     if (saved === 'light' || saved === 'dark') return saved;
-    // Default to dark
-    return 'dark';
+    // Default to light (Google style)
+    return 'light';
   });
 
   useEffect(() => {

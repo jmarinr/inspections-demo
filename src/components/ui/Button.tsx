@@ -11,50 +11,26 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export const Button: React.FC<ButtonProps> = ({
-  children,
-  variant = 'primary',
-  size = 'md',
-  isLoading = false,
-  leftIcon,
-  rightIcon,
-  fullWidth = false,
-  className = '',
-  disabled,
-  ...props
+  children, variant = 'primary', size = 'md', isLoading = false,
+  leftIcon, rightIcon, fullWidth = false, className = '', disabled, ...props
 }) => {
-  const baseStyles = 'font-semibold rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed';
-  
-  const variantStyles = {
-    primary: 'bg-gradient-to-r from-primary-600 to-primary-500 text-white hover:from-primary-700 hover:to-primary-600',
-    secondary: 'bg-dark-700 text-white hover:bg-dark-600 border border-dark-500',
-    success: 'bg-gradient-to-r from-emerald-600 to-emerald-500 text-white hover:from-emerald-700 hover:to-emerald-600',
-    whatsapp: 'bg-[#25D366] text-white hover:bg-[#20BD5A]',
-    ghost: 'bg-transparent text-dark-300 hover:text-white hover:bg-dark-800',
+  const vc: Record<string, string> = {
+    primary: 'btn-primary',
+    secondary: 'btn-secondary',
+    success: 'btn-success',
+    whatsapp: 'bg-[#1faa59] text-white hover:bg-[#189e4f] rounded-full font-semibold flex items-center justify-center gap-2 transition-all',
+    ghost: 'bg-transparent rounded-full font-medium flex items-center justify-center gap-2 transition-all',
   };
-
-  const sizeStyles = {
-    sm: 'py-2 px-4 text-sm',
-    md: 'py-3 px-6',
-    lg: 'py-4 px-8 text-lg',
-  };
-
-  const widthStyles = fullWidth ? 'w-full' : '';
+  const ss: Record<string, string> = { sm: 'py-2 px-4 text-sm', md: 'py-3 px-6', lg: 'py-4 px-8 text-lg' };
 
   return (
     <button
-      className={`${baseStyles} ${variantStyles[variant]} ${sizeStyles[size]} ${widthStyles} ${className}`}
+      className={`${vc[variant]} ${ss[size]} ${fullWidth ? 'w-full' : ''} ${className}`}
+      style={variant === 'ghost' ? { color: 'var(--text-secondary)' } : undefined}
       disabled={disabled || isLoading}
       {...props}
     >
-      {isLoading ? (
-        <Loader2 className="w-5 h-5 animate-spin" />
-      ) : (
-        <>
-          {leftIcon}
-          {children}
-          {rightIcon}
-        </>
-      )}
+      {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <>{leftIcon}{children}{rightIcon}</>}
     </button>
   );
 };

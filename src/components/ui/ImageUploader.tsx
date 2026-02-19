@@ -175,7 +175,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         <div className="absolute top-3 right-3 flex gap-2">
           <button
             onClick={clearImage}
-            className="p-2 bg-dark-800/80 rounded-full hover:bg-dark-700 transition-colors"
+            className="p-2 bg-[var(--bg-input)]/80 rounded-full hover:bg-[var(--bg-input)] transition-colors"
             disabled={disabled}
           >
             <RotateCcw className="w-5 h-5 text-white" />
@@ -210,17 +210,17 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         className={`
           border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center gap-4 
           cursor-pointer transition-all aspect-[4/3]
-          ${isDragging ? 'border-primary-500 bg-primary-500/10' : 'border-dark-500 hover:border-primary-500 hover:bg-dark-800/30'}
+          ${isDragging ? 'border-[var(--hk-primary)] bg-[var(--hk-primary-surface)]' : 'border-[var(--border-color)] hover:border-[var(--hk-primary)] hover:bg-[var(--bg-input)]/30'}
           ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
           ${isProcessing ? 'animate-pulse' : ''}
         `}
       >
-        <div className="p-4 bg-dark-700/50 rounded-full">
-          <Upload className="w-8 h-8 text-dark-400" />
+        <div className="p-4 bg-[var(--bg-input)]/50 rounded-full">
+          <Upload className="w-8 h-8 text-[var(--text-muted)]" />
         </div>
         <div className="text-center">
-          <p className="font-medium text-dark-200">{label}</p>
-          <p className="text-sm text-dark-400">{description}</p>
+          <p className="font-medium text-[var(--text-secondary)]">{label}</p>
+          <p className="text-sm text-[var(--text-muted)]">{description}</p>
         </div>
         <div className="flex gap-3">
           <Button

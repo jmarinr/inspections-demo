@@ -88,7 +88,7 @@ const IdPhotoCard: React.FC<IdPhotoCardProps> = ({ label, image, isProcessing, v
           <Loader2 className="w-6 h-6 animate-spin" style={{ color: 'var(--hk-primary)' }} />
         ) : (
           <>
-            <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: 'rgba(236,72,153,0.15)' }}>
+            <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: 'var(--hk-primary-surface)' }}>
               <Camera className="w-6 h-6" style={{ color: 'var(--hk-primary)' }} />
             </div>
             <div className="text-center">
@@ -288,7 +288,7 @@ export const IdentityStep: React.FC = () => {
         <Card>
           <div className="flex items-center gap-4">
             <div className="relative">
-              <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: 'rgba(236,72,153,0.15)' }}>
+              <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: 'var(--hk-primary-surface)' }}>
                 <Sparkles className="w-7 h-7 animate-pulse" style={{ color: 'var(--hk-primary)' }} />
               </div>
             </div>
@@ -338,7 +338,7 @@ export const IdentityStep: React.FC = () => {
       {showFields && (
         <Card className="animate-fade-in">
           <div className="flex items-center gap-3 mb-5">
-            <div className="p-2 rounded-xl" style={{ backgroundColor: 'rgba(236,72,153,0.15)' }}>
+            <div className="p-2 rounded-xl" style={{ backgroundColor: 'var(--hk-primary-surface)' }}>
               <Edit3 className="w-5 h-5" style={{ color: 'var(--hk-primary)' }} />
             </div>
             <div>

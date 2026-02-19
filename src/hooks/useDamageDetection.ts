@@ -408,10 +408,43 @@ async function analyzeWithCanvas(imageData: string): Promise<DamageAnalysisResul
         return scoreB - scoreA;
       });
       
+      // === PASS 5b: Split large clusters into sub-regions ===
+      // When a cluster covers >25% of cells, the damage is massive - split by quadrant
+      const totalCells = gridCols * gridRows;
+      const finalClusters: ScoredCell[][] = [];
+      
+      for (const cluster of clusters) {
+        if (cluster.length > totalCells * 0.25) {
+          // Split into quadrants based on grid position
+          const midRow = (Math.min(...cluster.map(c => c.row)) + Math.max(...cluster.map(c => c.row))) / 2;
+          const midCol = (Math.min(...cluster.map(c => c.col)) + Math.max(...cluster.map(c => c.col))) / 2;
+          
+          const quads: ScoredCell[][] = [[], [], [], []];
+          for (const c of cluster) {
+            const qi = (c.row <= midRow ? 0 : 2) + (c.col <= midCol ? 0 : 1);
+            quads[qi].push(c);
+          }
+          for (const q of quads) {
+            if (q.length >= 2) finalClusters.push(q);
+          }
+        } else {
+          finalClusters.push(cluster);
+        }
+      }
+      
+      // Re-sort
+      finalClusters.sort((a, b) => {
+        const scoreA = a.reduce((s, c) => s + c.score, 0);
+        const scoreB = b.reduce((s, c) => s + c.score, 0);
+        return scoreB - scoreA;
+      });
+      
       // === PASS 6: Convert clusters to damage detections ===
       const damages: DamageDetection[] = [];
+      // Track used parts to vary assignments
+      const usedParts = new Set<VehiclePart>();
       
-      for (const cluster of clusters.slice(0, 8)) { // max 8 damage zones
+      for (const cluster of finalClusters.slice(0, 8)) { // max 8 damage zones
         if (cluster.length === 0) continue;
         
         const totalScore = cluster.reduce((s, c) => s + c.score, 0);
@@ -428,11 +461,12 @@ async function analyzeWithCanvas(imageData: string): Promise<DamageAnalysisResul
         const bw = Math.max(0.06, ((maxCol - minCol + 1) / gridCols) * 1.1);
         const bh = Math.max(0.06, ((maxRow - minRow + 1) / gridRows) * 1.1);
         
-        // Determine severity from score
-        const severity: DamageSeverity = avgScore > 40 ? 'severe' 
-          : avgScore > 25 ? 'moderate' : 'minor';
+        // Severity: larger clusters = more severe, high scores = more severe
+        const clusterCoverage = cluster.length / totalCells;
+        const severity: DamageSeverity = avgScore > 35 || clusterCoverage > 0.12 ? 'severe' 
+          : avgScore > 20 || clusterCoverage > 0.06 ? 'moderate' : 'minor';
         
-        // Determine damage type from characteristics
+        // Determine damage type
         const avgEdgeC = cluster.reduce((s, c) => s + c.edgeStrength, 0) / cluster.length;
         const avgColorC = cluster.reduce((s, c) => s + c.colorStd, 0) / cluster.length;
         const avgBrC = cluster.reduce((s, c) => s + c.brightness, 0) / cluster.length;
@@ -445,11 +479,17 @@ async function analyzeWithCanvas(imageData: string): Promise<DamageAnalysisResul
         else if (avgEdgeC > avgEdge * 1.5) type = 'scratch';
         else type = 'dent';
         
-        // If cluster is large → more severe damage type
-        if (cluster.length >= 4 && type === 'scratch') type = 'deformation';
+        if (cluster.length >= 4) type = 'deformation';
         if (cluster.length >= 3 && type === 'dent') type = 'deformation';
         
-        const { part, zone, side } = getPartFromPosition(cx, cy);
+        // Get part, avoid duplicates by trying alternate parts
+        let { part, zone, side } = getPartFromPosition(cx, cy);
+        if (usedParts.has(part)) {
+          const alt = getAlternatePart(cx, cy, usedParts);
+          part = alt.part; zone = alt.zone; side = alt.side;
+        }
+        usedParts.add(part);
+        
         const partLabel = VEHICLE_PART_LABELS[part] || part;
         const typeLabel = DAMAGE_TYPE_LABELS[type] || type;
         
@@ -473,10 +513,16 @@ async function analyzeWithCanvas(imageData: string): Promise<DamageAnalysisResul
       }
       
       // === Build result ===
+      // If majority of cells are damaged, this is likely total loss
+      const damageRatio = damageCells.length / totalCells;
       const overallSev = damages.length === 0 ? 'none' as const
+        : damageRatio > 0.5 || (damages.filter(d => d.severity === 'severe').length >= 3) ? 'severe' as const
         : damages.some(d => d.severity === 'severe') ? 'severe' as const
         : damages.some(d => d.severity === 'moderate') ? 'moderate' as const
         : 'minor' as const;
+      
+      // Detect total loss
+      const isTotalLoss = damageRatio > 0.6 || damages.filter(d => d.severity === 'severe').length >= 4;
       
       const parts = { exterior: [] as string[], mechanical: [] as string[], glass: [] as string[], structural: [] as string[] };
       for (const d of damages) {
@@ -487,7 +533,10 @@ async function analyzeWithCanvas(imageData: string): Promise<DamageAnalysisResul
       }
       
       const recs: string[] = [];
-      if (overallSev === 'severe') {
+      if (isTotalLoss) {
+        recs.push('🚨 Daños masivos - posible pérdida total');
+        recs.push('⚠️ Daño estructural severo detectado');
+      } else if (overallSev === 'severe') {
         recs.push('🚨 Daño severo detectado - evaluación presencial requerida');
         recs.push('⚠️ Posible daño estructural');
       }
@@ -497,12 +546,12 @@ async function analyzeWithCanvas(imageData: string): Promise<DamageAnalysisResul
       if (damages.length === 0) recs.push('ℹ️ No se detectaron daños significativos');
       recs.push('📋 Se recomienda validación por ajustador certificado');
       
-      const isDriveable = overallSev !== 'severe' && !damages.some(d => d.affectsMechanical);
+      const isDriveable = !isTotalLoss && overallSev !== 'severe' && !damages.some(d => d.affectsMechanical);
       
       resolve({
         hasDamage: damages.length > 0,
         damages,
-        overallSeverity: overallSev,
+        overallSeverity: isTotalLoss ? 'total_loss' : overallSev,
         confidence: damages.length > 0 ? damages.reduce((s, d) => s + d.confidence, 0) / damages.length : 0.5,
         impactZone: damages[0]?.zone || null,
         impactType: damages.length >= 3 ? ('frontal_collision' as const) : damages.length > 0 ? ('unknown' as const) : null,
@@ -515,7 +564,8 @@ async function analyzeWithCanvas(imageData: string): Promise<DamageAnalysisResul
         },
         affectedParts: parts,
         recommendations: recs,
-        repairCategory: overallSev === 'severe' ? 'major_repair' 
+        repairCategory: isTotalLoss ? 'total_loss' 
+          : overallSev === 'severe' ? 'major_repair' 
           : overallSev === 'moderate' ? 'moderate_repair' : 'minor_repair',
       });
     };
@@ -524,28 +574,90 @@ async function analyzeWithCanvas(imageData: string): Promise<DamageAnalysisResul
   });
 }
 
-// Map normalized x,y position to vehicle part
+// Map normalized x,y position to vehicle part (more granular)
 function getPartFromPosition(x: number, y: number): { part: VehiclePart; zone: VehicleZone; side: DamageDetection['side'] } {
-  const side = x < 0.35 ? 'left' as const : x > 0.65 ? 'right' as const : 'center' as const;
+  // Horizontal zones
+  const isLeft = x < 0.33;
+  const isRight = x > 0.67;
   
-  // Top region
+  const side = isLeft ? 'left' as const : isRight ? 'right' as const : 'center' as const;
+  
+  // Vertical zones (6 bands)
+  if (y < 0.15) {
+    // Very top: roof / windshield area
+    if (isLeft) return { part: 'mirror_left', zone: 'lateral_left', side: 'left' };
+    if (isRight) return { part: 'mirror_right', zone: 'lateral_right', side: 'right' };
+    return { part: 'windshield', zone: 'frontal', side };
+  }
   if (y < 0.3) {
-    if (x < 0.3) return { part: 'front_fender_left', zone: 'frontal', side: 'left' };
-    if (x > 0.7) return { part: 'front_fender_right', zone: 'frontal', side: 'right' };
+    // Upper: hood, windshield, A-pillar area
+    if (isLeft) return { part: 'front_fender_left', zone: 'frontal', side: 'left' };
+    if (isRight) return { part: 'front_fender_right', zone: 'frontal', side: 'right' };
     return { part: 'hood', zone: 'frontal', side };
   }
-  // Middle region
-  if (y < 0.6) {
-    if (x < 0.25) return { part: 'front_door_left', zone: 'lateral_left', side: 'left' };
-    if (x > 0.75) return { part: 'front_door_right', zone: 'lateral_right', side: 'right' };
-    if (x < 0.4) return { part: 'headlight_left', zone: 'frontal', side: 'left' };
-    if (x > 0.6) return { part: 'headlight_right', zone: 'frontal', side: 'right' };
+  if (y < 0.45) {
+    // Upper-middle: doors, front fender
+    if (isLeft) return { part: 'front_door_left', zone: 'lateral_left', side: 'left' };
+    if (isRight) return { part: 'front_door_right', zone: 'lateral_right', side: 'right' };
     return { part: 'grille', zone: 'frontal', side };
   }
-  // Bottom region
-  if (x < 0.3) return { part: 'wheel_front_left', zone: 'frontal', side: 'left' };
-  if (x > 0.7) return { part: 'wheel_front_right', zone: 'frontal', side: 'right' };
+  if (y < 0.6) {
+    // Mid: headlights, grille, doors
+    if (isLeft) return { part: 'headlight_left', zone: 'frontal', side: 'left' };
+    if (isRight) return { part: 'headlight_right', zone: 'frontal', side: 'right' };
+    return { part: 'front_bumper', zone: 'frontal', side };
+  }
+  if (y < 0.75) {
+    // Lower-mid: bumper, side panels
+    if (isLeft) return { part: 'side_panel_left', zone: 'lateral_left', side: 'left' };
+    if (isRight) return { part: 'side_panel_right', zone: 'lateral_right', side: 'right' };
+    return { part: 'front_bumper', zone: 'frontal', side };
+  }
+  // Bottom: wheels, undercarriage
+  if (isLeft) return { part: 'wheel_front_left', zone: 'frontal', side: 'left' };
+  if (isRight) return { part: 'wheel_front_right', zone: 'frontal', side: 'right' };
   return { part: 'front_bumper', zone: 'frontal', side };
+}
+
+// Get an alternate part when the primary is already used
+function getAlternatePart(x: number, y: number, used: Set<VehiclePart>): { part: VehiclePart; zone: VehicleZone; side: DamageDetection['side'] } {
+  const isLeft = x < 0.4;
+  const isRight = x > 0.6;
+  const side = isLeft ? 'left' as const : isRight ? 'right' as const : 'center' as const;
+  
+  // List of candidates ordered by position
+  const candidates: { part: VehiclePart; zone: VehicleZone; side: DamageDetection['side'] }[] = [];
+  
+  if (y < 0.35) {
+    candidates.push(
+      { part: 'hood', zone: 'frontal', side },
+      { part: 'windshield', zone: 'frontal', side },
+      { part: isLeft ? 'front_fender_left' : 'front_fender_right', zone: 'frontal', side },
+      { part: 'roof', zone: 'roof', side },
+    );
+  } else if (y < 0.65) {
+    candidates.push(
+      { part: isLeft ? 'front_door_left' : isRight ? 'front_door_right' : 'grille', zone: isLeft ? 'lateral_left' : isRight ? 'lateral_right' : 'frontal', side },
+      { part: isLeft ? 'headlight_left' : 'headlight_right', zone: 'frontal', side },
+      { part: isLeft ? 'rear_door_left' : 'rear_door_right', zone: isLeft ? 'lateral_left' : 'lateral_right', side },
+      { part: 'front_bumper', zone: 'frontal', side },
+      { part: isLeft ? 'side_panel_left' : 'side_panel_right', zone: isLeft ? 'lateral_left' : 'lateral_right', side },
+    );
+  } else {
+    candidates.push(
+      { part: 'front_bumper', zone: 'frontal', side },
+      { part: isLeft ? 'side_panel_left' : 'side_panel_right', zone: isLeft ? 'lateral_left' : 'lateral_right', side },
+      { part: isLeft ? 'wheel_front_left' : 'wheel_front_right', zone: 'frontal', side },
+      { part: 'radiator', zone: 'frontal', side: 'center' },
+      { part: 'frame', zone: 'undercarriage', side },
+    );
+  }
+  
+  for (const c of candidates) {
+    if (!used.has(c.part)) return c;
+  }
+  // Fallback
+  return candidates[0];
 }
 
 // ===== MAP API RESPONSE =====

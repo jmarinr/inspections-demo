@@ -85,7 +85,7 @@ const PhotoCard: React.FC<PhotoCardProps> = ({
           <Loader2 className="w-6 h-6 animate-spin" style={{ color: 'var(--hk-primary)' }} />
         ) : (
           <>
-            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ backgroundColor: 'rgba(236,72,153,0.15)' }}>
+            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ backgroundColor: 'var(--hk-primary-surface)' }}>
               <Camera className="w-5 h-5" style={{ color: 'var(--hk-primary)' }} />
             </div>
             <div className="text-center px-1">
@@ -109,7 +109,7 @@ interface AnalysisItemProps {
 
 const AnalysisItem: React.FC<AnalysisItemProps> = ({ icon, label, value, confidence }) => (
   <div className="flex items-center gap-3 p-3 rounded-lg" style={{ backgroundColor: 'var(--bg-input)' }}>
-    <div className="p-2 rounded-lg shrink-0" style={{ backgroundColor: value ? 'rgba(16,185,129,0.15)' : 'rgba(236,72,153,0.1)' }}>
+    <div className="p-2 rounded-lg shrink-0" style={{ backgroundColor: value ? 'rgba(16,185,129,0.15)' : 'var(--hk-primary-surface)' }}>
       {icon}
     </div>
     <div className="flex-1 min-w-0">
@@ -331,7 +331,7 @@ export const VehiclePhotosStep: React.FC = () => {
         <Card className="animate-fade-in">
           <div className="flex items-center gap-4">
             <div className="relative">
-              <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: 'rgba(236,72,153,0.15)' }}>
+              <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: 'var(--hk-primary-surface)' }}>
                 <Search className="w-7 h-7 animate-pulse" style={{ color: 'var(--hk-primary)' }} />
               </div>
               <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-primary-500 flex items-center justify-center">
