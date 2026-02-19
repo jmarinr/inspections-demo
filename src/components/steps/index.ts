@@ -1,0 +1,9 @@
+export { StartStep } from './StartStep';
+export { IdentityStep } from './IdentityStep';
+export { ConsentStep } from './ConsentStep';
+export { VehicleDataStep } from './VehicleDataStep';
+export { VehiclePhotosStep } from './VehiclePhotosStep';
+export { DamagePhotosStep } from './DamagePhotosStep';
+export { ThirdPartyStep } from './ThirdPartyStep';
+export { SceneStep } from './SceneStep';
+export { SummaryStep } from './SummaryStep';
