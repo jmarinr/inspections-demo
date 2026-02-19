@@ -208,185 +208,271 @@ async function analyzeWithClaude(imageData: string, onProgress: (p: number) => v
 }
 
 // ===== SMART CANVAS FALLBACK =====
-// Analyzes the image with canvas to detect high-contrast damage regions
+// Multi-pass image analysis: edges, local contrast, texture irregularity
 async function analyzeWithCanvas(imageData: string): Promise<DamageAnalysisResult> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      const scale = Math.min(300 / img.width, 300 / img.height, 1);
-      canvas.width = Math.floor(img.width * scale);
-      canvas.height = Math.floor(img.height * scale);
+      // Use higher resolution for better detection
+      const maxDim = 400;
+      const scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
+      const W = Math.floor(img.width * scale);
+      const H = Math.floor(img.height * scale);
+      canvas.width = W;
+      canvas.height = H;
       const ctx = canvas.getContext('2d');
       
       if (!ctx) { resolve(createEmptyResult()); return; }
       
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const pixels = imgData.data;
+      ctx.drawImage(img, 0, 0, W, H);
+      const imgData = ctx.getImageData(0, 0, W, H);
+      const px = imgData.data;
       
-      // Divide image into grid cells and analyze each
-      const gridCols = 6;
-      const gridRows = 4;
-      const cellW = canvas.width / gridCols;
-      const cellH = canvas.height / gridRows;
-      
-      interface CellInfo {
-        row: number; col: number;
-        avgR: number; avgG: number; avgB: number;
-        brightness: number; edgeDensity: number;
-        colorVariance: number;
+      // === PASS 1: Compute Sobel edge map ===
+      const edgeMap = new Float32Array(W * H);
+      for (let y = 1; y < H - 1; y++) {
+        for (let x = 1; x < W - 1; x++) {
+          const idx = (y * W + x);
+          // Grayscale values of 3x3 neighborhood
+          const g = (ix: number, iy: number) => {
+            const i = (iy * W + ix) * 4;
+            return (px[i] + px[i+1] + px[i+2]) / 3;
+          };
+          // Sobel
+          const gx = -g(x-1,y-1) - 2*g(x-1,y) - g(x-1,y+1) + g(x+1,y-1) + 2*g(x+1,y) + g(x+1,y+1);
+          const gy = -g(x-1,y-1) - 2*g(x,y-1) - g(x+1,y-1) + g(x-1,y+1) + 2*g(x,y+1) + g(x+1,y+1);
+          edgeMap[idx] = Math.sqrt(gx*gx + gy*gy);
+        }
       }
       
-      const cells: CellInfo[] = [];
+      // === PASS 2: Grid analysis with finer grid ===
+      const gridCols = 8;
+      const gridRows = 6;
+      const cellW = W / gridCols;
+      const cellH = H / gridRows;
+      
+      interface Cell {
+        row: number; col: number;
+        edgeStrength: number;    // Average edge magnitude
+        edgePeak: number;        // Max edge in cell
+        brightness: number;
+        colorStd: number;        // Color standard deviation (texture roughness)
+        localContrast: number;   // Contrast between this cell and neighbors
+      }
+      
+      const cells: Cell[] = [];
       
       for (let row = 0; row < gridRows; row++) {
         for (let col = 0; col < gridCols; col++) {
-          let totalR = 0, totalG = 0, totalB = 0, count = 0, edges = 0;
-          const startX = Math.floor(col * cellW);
-          const startY = Math.floor(row * cellH);
-          const endX = Math.floor((col + 1) * cellW);
-          const endY = Math.floor((row + 1) * cellH);
+          const sx = Math.floor(col * cellW);
+          const sy = Math.floor(row * cellH);
+          const ex = Math.floor((col + 1) * cellW);
+          const ey = Math.floor((row + 1) * cellH);
           
-          for (let y = startY; y < endY; y++) {
-            for (let x = startX; x < endX; x++) {
-              const i = (y * canvas.width + x) * 4;
-              totalR += pixels[i]; totalG += pixels[i+1]; totalB += pixels[i+2];
+          let edgeSum = 0, edgeMax = 0, brSum = 0;
+          let rSum = 0, gSum = 0, bSum = 0;
+          let count = 0;
+          const rgbs: number[][] = [];
+          
+          for (let y = sy; y < ey; y++) {
+            for (let x = sx; x < ex; x++) {
+              const i = (y * W + x) * 4;
+              const r = px[i], g = px[i+1], b = px[i+2];
+              rSum += r; gSum += g; bSum += b;
+              brSum += (r + g + b) / 3;
+              const e = edgeMap[y * W + x];
+              edgeSum += e;
+              if (e > edgeMax) edgeMax = e;
               count++;
-              // Edge detection with right neighbor
-              if (x + 1 < endX) {
-                const j = (y * canvas.width + x + 1) * 4;
-                const diff = Math.abs(pixels[i] - pixels[j]) + Math.abs(pixels[i+1] - pixels[j+1]) + Math.abs(pixels[i+2] - pixels[j+2]);
-                if (diff > 80) edges++;
-              }
+              if (count % 3 === 0) rgbs.push([r, g, b]); // sample
             }
           }
           
-          const avgR = totalR / count;
-          const avgG = totalG / count;
-          const avgB = totalB / count;
+          const avgR = rSum / count, avgG = gSum / count, avgB = bSum / count;
           
-          // Compute color variance within cell
-          let variance = 0;
-          for (let y = startY; y < endY; y += 2) {
-            for (let x = startX; x < endX; x += 2) {
-              const i = (y * canvas.width + x) * 4;
-              variance += Math.pow(pixels[i] - avgR, 2) + Math.pow(pixels[i+1] - avgG, 2) + Math.pow(pixels[i+2] - avgB, 2);
-            }
+          // Color standard deviation
+          let colorVar = 0;
+          for (const [r, g, b] of rgbs) {
+            colorVar += (r - avgR) ** 2 + (g - avgG) ** 2 + (b - avgB) ** 2;
           }
-          variance = variance / (count / 4);
+          const colorStd = Math.sqrt(colorVar / Math.max(rgbs.length, 1));
           
           cells.push({
-            row, col, avgR, avgG, avgB,
-            brightness: (avgR + avgG + avgB) / 3,
-            edgeDensity: edges / count,
-            colorVariance: variance,
+            row, col,
+            edgeStrength: edgeSum / count,
+            edgePeak: edgeMax,
+            brightness: brSum / count,
+            colorStd,
+            localContrast: 0, // computed below
           });
         }
       }
       
-      // Find anomalous cells (potential damage areas)
-      // Damage areas tend to have: high edge density, unusual color (dark spots, scratches), high variance
-      const avgBrightness = cells.reduce((s, c) => s + c.brightness, 0) / cells.length;
-      const avgEdge = cells.reduce((s, c) => s + c.edgeDensity, 0) / cells.length;
-      const avgVariance = cells.reduce((s, c) => s + c.colorVariance, 0) / cells.length;
+      // === PASS 3: Compute local contrast (difference from neighbors) ===
+      for (let i = 0; i < cells.length; i++) {
+        const c = cells[i];
+        let neighborDiff = 0, nCount = 0;
+        for (const other of cells) {
+          if (Math.abs(other.row - c.row) <= 1 && Math.abs(other.col - c.col) <= 1 && other !== c) {
+            neighborDiff += Math.abs(c.edgeStrength - other.edgeStrength);
+            neighborDiff += Math.abs(c.colorStd - other.colorStd) * 0.3;
+            neighborDiff += Math.abs(c.brightness - other.brightness) * 0.2;
+            nCount++;
+          }
+        }
+        c.localContrast = nCount > 0 ? neighborDiff / nCount : 0;
+      }
       
-      const anomalyCells = cells.filter(c => {
-        const edgeAnomaly = c.edgeDensity > avgEdge * 1.5;
-        const darkAnomaly = c.brightness < avgBrightness * 0.7;
-        const varianceAnomaly = c.colorVariance > avgVariance * 1.8;
-        return (edgeAnomaly && varianceAnomaly) || (darkAnomaly && edgeAnomaly) || (varianceAnomaly && darkAnomaly);
+      // === PASS 4: Score each cell for damage likelihood ===
+      const avgEdge = cells.reduce((s, c) => s + c.edgeStrength, 0) / cells.length;
+      const avgColorStd = cells.reduce((s, c) => s + c.colorStd, 0) / cells.length;
+      const avgContrast = cells.reduce((s, c) => s + c.localContrast, 0) / cells.length;
+      const avgBr = cells.reduce((s, c) => s + c.brightness, 0) / cells.length;
+      
+      interface ScoredCell extends Cell {
+        score: number;
+      }
+      
+      const scored: ScoredCell[] = cells.map(c => {
+        let score = 0;
+        
+        // High edge density = likely damage (deformation, cracks, scratches)
+        if (c.edgeStrength > avgEdge * 1.3) score += (c.edgeStrength / avgEdge - 1) * 30;
+        if (c.edgePeak > avgEdge * 4) score += 15; // Very sharp edge = definite feature
+        
+        // High color variation = damage (mixed paint, exposed metal, dirt)
+        if (c.colorStd > avgColorStd * 1.3) score += (c.colorStd / avgColorStd - 1) * 20;
+        
+        // High local contrast = anomaly relative to surroundings
+        if (c.localContrast > avgContrast * 1.3) score += (c.localContrast / avgContrast - 1) * 25;
+        
+        // Dark spots (shadows from dents, holes)
+        if (c.brightness < avgBr * 0.65) score += 15;
+        
+        // Very bright spots (exposed metal, glass reflection from break)
+        if (c.brightness > avgBr * 1.5 && c.edgeStrength > avgEdge) score += 10;
+        
+        // Bonus for cells in the center-bottom region (where damage usually is on vehicle photos)
+        if (c.row >= gridRows * 0.3 && c.row <= gridRows * 0.85) score += 5;
+        
+        return { ...c, score };
       });
       
-      // Map anomalous cells to damage detections
-      const damages: DamageDetection[] = [];
-      const damageTypes: DamageType[] = ['dent', 'scratch', 'deformation', 'paint', 'crack', 'broken'];
-      const partMap = getPartFromPosition;
+      // === PASS 5: Threshold and cluster damage cells ===
+      // Use percentile-based threshold
+      const sortedScores = scored.map(s => s.score).sort((a, b) => b - a);
+      const threshold = Math.max(
+        sortedScores[Math.floor(sortedScores.length * 0.2)] || 10, // top 20%
+        15 // minimum threshold
+      );
       
-      // Cluster adjacent anomalous cells
+      const damageCells = scored.filter(c => c.score >= threshold);
+      console.log('[CanvasDetect] Threshold:', threshold.toFixed(1), 'Damage cells:', damageCells.length, '/', cells.length);
+      
+      // Cluster adjacent damage cells using flood fill
       const visited = new Set<string>();
+      const clusters: ScoredCell[][] = [];
       
-      for (const cell of anomalyCells) {
+      for (const cell of damageCells) {
         const key = `${cell.row}-${cell.col}`;
         if (visited.has(key)) continue;
+        
+        // BFS flood fill
+        const cluster: ScoredCell[] = [];
+        const queue = [cell];
         visited.add(key);
         
-        // Find cluster of adjacent anomalous cells
-        const cluster = [cell];
-        for (const other of anomalyCells) {
-          const oKey = `${other.row}-${other.col}`;
-          if (visited.has(oKey)) continue;
-          if (Math.abs(other.row - cell.row) <= 1 && Math.abs(other.col - cell.col) <= 1) {
-            cluster.push(other);
-            visited.add(oKey);
+        while (queue.length > 0) {
+          const current = queue.shift()!;
+          cluster.push(current);
+          
+          // Check 8-connected neighbors
+          for (const other of damageCells) {
+            const oKey = `${other.row}-${other.col}`;
+            if (visited.has(oKey)) continue;
+            if (Math.abs(other.row - current.row) <= 1 && Math.abs(other.col - current.col) <= 1) {
+              visited.add(oKey);
+              queue.push(other);
+            }
           }
         }
         
-        // Compute cluster center and size
-        const centerCol = cluster.reduce((s, c) => s + c.col, 0) / cluster.length;
-        const centerRow = cluster.reduce((s, c) => s + c.row, 0) / cluster.length;
-        const x = (centerCol + 0.5) / gridCols;
-        const y = (centerRow + 0.5) / gridRows;
-        const w = Math.max(0.08, (cluster.length / gridCols) * 0.3);
-        const h = Math.max(0.08, (cluster.length / gridRows) * 0.3);
+        clusters.push(cluster);
+      }
+      
+      // Sort clusters by total score (most significant first)
+      clusters.sort((a, b) => {
+        const scoreA = a.reduce((s, c) => s + c.score, 0);
+        const scoreB = b.reduce((s, c) => s + c.score, 0);
+        return scoreB - scoreA;
+      });
+      
+      // === PASS 6: Convert clusters to damage detections ===
+      const damages: DamageDetection[] = [];
+      
+      for (const cluster of clusters.slice(0, 8)) { // max 8 damage zones
+        if (cluster.length === 0) continue;
         
-        // Determine severity from anomaly strength
-        const maxEdge = Math.max(...cluster.map(c => c.edgeDensity));
-        const maxVar = Math.max(...cluster.map(c => c.colorVariance));
-        const severity: DamageSeverity = maxEdge > avgEdge * 3 || maxVar > avgVariance * 4 
-          ? 'severe' : maxEdge > avgEdge * 2 ? 'moderate' : 'minor';
+        const totalScore = cluster.reduce((s, c) => s + c.score, 0);
+        const avgScore = totalScore / cluster.length;
         
-        const typeIdx = damages.length % damageTypes.length;
-        const { part, zone, side } = partMap(x, y);
+        // Compute bounding box
+        const minCol = Math.min(...cluster.map(c => c.col));
+        const maxCol = Math.max(...cluster.map(c => c.col));
+        const minRow = Math.min(...cluster.map(c => c.row));
+        const maxRow = Math.max(...cluster.map(c => c.row));
+        
+        const cx = ((minCol + maxCol) / 2 + 0.5) / gridCols;
+        const cy = ((minRow + maxRow) / 2 + 0.5) / gridRows;
+        const bw = Math.max(0.06, ((maxCol - minCol + 1) / gridCols) * 1.1);
+        const bh = Math.max(0.06, ((maxRow - minRow + 1) / gridRows) * 1.1);
+        
+        // Determine severity from score
+        const severity: DamageSeverity = avgScore > 40 ? 'severe' 
+          : avgScore > 25 ? 'moderate' : 'minor';
+        
+        // Determine damage type from characteristics
+        const avgEdgeC = cluster.reduce((s, c) => s + c.edgeStrength, 0) / cluster.length;
+        const avgColorC = cluster.reduce((s, c) => s + c.colorStd, 0) / cluster.length;
+        const avgBrC = cluster.reduce((s, c) => s + c.brightness, 0) / cluster.length;
+        
+        let type: DamageType;
+        if (avgEdgeC > avgEdge * 2.5 && avgColorC > avgColorStd * 1.5) type = 'deformation';
+        else if (avgEdgeC > avgEdge * 2) type = 'crack';
+        else if (avgBrC < avgBr * 0.6) type = 'dent';
+        else if (avgColorC > avgColorStd * 1.8) type = 'paint';
+        else if (avgEdgeC > avgEdge * 1.5) type = 'scratch';
+        else type = 'dent';
+        
+        // If cluster is large → more severe damage type
+        if (cluster.length >= 4 && type === 'scratch') type = 'deformation';
+        if (cluster.length >= 3 && type === 'dent') type = 'deformation';
+        
+        const { part, zone, side } = getPartFromPosition(cx, cy);
         const partLabel = VEHICLE_PART_LABELS[part] || part;
+        const typeLabel = DAMAGE_TYPE_LABELS[type] || type;
+        
+        const repairType = severity === 'severe' ? 'part_replacement' as const
+          : severity === 'moderate' || type === 'deformation' ? 'body_repair' as const
+          : 'paintless_repair' as const;
         
         damages.push({
           id: `dmg-${Date.now()}-${damages.length}`,
-          type: damageTypes[typeIdx],
+          type,
           severity,
           part, zone, side,
-          confidence: 0.65 + Math.random() * 0.2,
-          description: `${DAMAGE_TYPE_LABELS[damageTypes[typeIdx]]} detectado en ${partLabel}`,
-          estimatedRepair: severity === 'severe' ? 'part_replacement' : severity === 'moderate' ? 'body_repair' : 'paintless_repair',
-          affectsStructure: severity === 'severe',
-          affectsMechanical: false,
+          confidence: Math.min(0.92, 0.60 + avgScore * 0.005 + cluster.length * 0.03),
+          description: `${typeLabel} ${severity === 'severe' ? 'severa' : severity === 'moderate' ? 'moderada' : 'leve'} en ${partLabel}`,
+          estimatedRepair: repairType,
+          affectsStructure: severity === 'severe' || type === 'deformation',
+          affectsMechanical: type === 'deformation' && severity === 'severe',
           affectsSafety: severity === 'severe',
-          boundingBox: { x, y, width: w, height: h },
+          boundingBox: { x: cx, y: cy, width: bw, height: bh },
         });
-        
-        if (damages.length >= 6) break; // Max 6 damage areas
       }
       
-      // If we didn't find anomalies but the image clearly has a vehicle, create a default
-      if (damages.length === 0 && avgEdge > 0.05) {
-        // Likely a vehicle photo - check if there are any high-edge regions
-        const sortedByEdge = [...cells].sort((a, b) => b.edgeDensity - a.edgeDensity);
-        const top3 = sortedByEdge.slice(0, 3);
-        
-        for (const cell of top3) {
-          if (cell.edgeDensity > avgEdge * 1.3) {
-            const x = (cell.col + 0.5) / gridCols;
-            const y = (cell.row + 0.5) / gridRows;
-            const { part, zone, side } = getPartFromPosition(x, y);
-            const partLabel = VEHICLE_PART_LABELS[part] || part;
-            
-            damages.push({
-              id: `dmg-${Date.now()}-${damages.length}`,
-              type: 'dent',
-              severity: 'minor',
-              part, zone, side,
-              confidence: 0.55 + Math.random() * 0.15,
-              description: `Posible daño menor en ${partLabel}`,
-              estimatedRepair: 'paintless_repair',
-              affectsStructure: false,
-              affectsMechanical: false,
-              affectsSafety: false,
-              boundingBox: { x, y, width: 0.12, height: 0.12 },
-            });
-          }
-        }
-      }
-      
+      // === Build result ===
       const overallSev = damages.length === 0 ? 'none' as const
         : damages.some(d => d.severity === 'severe') ? 'severe' as const
         : damages.some(d => d.severity === 'moderate') ? 'moderate' as const
@@ -396,15 +482,22 @@ async function analyzeWithCanvas(imageData: string): Promise<DamageAnalysisResul
       for (const d of damages) {
         const label = VEHICLE_PART_LABELS[d.part] || d.part;
         if (d.affectsStructure) parts.structural.push(label);
+        else if (d.affectsMechanical) parts.mechanical.push(label);
         else parts.exterior.push(label);
       }
       
       const recs: string[] = [];
-      if (damages.some(d => d.severity === 'severe')) recs.push('⚠️ Daño severo detectado - se recomienda evaluación presencial');
-      if (damages.some(d => d.affectsStructure)) recs.push('🔧 Posible daño estructural - taller especializado');
-      if (damages.length > 0 && overallSev === 'minor') recs.push('✅ Daños menores - reparación estándar');
-      if (damages.length === 0) recs.push('ℹ️ Análisis por visión computacional (precisión limitada)');
+      if (overallSev === 'severe') {
+        recs.push('🚨 Daño severo detectado - evaluación presencial requerida');
+        recs.push('⚠️ Posible daño estructural');
+      }
+      if (overallSev === 'moderate') recs.push('⚠️ Daños moderados - se requiere reparación en taller');
+      if (overallSev === 'minor') recs.push('✅ Daños menores - reparación estándar');
+      if (damages.some(d => d.affectsStructure)) recs.push('🔧 Requiere taller especializado en estructura');
+      if (damages.length === 0) recs.push('ℹ️ No se detectaron daños significativos');
       recs.push('📋 Se recomienda validación por ajustador certificado');
+      
+      const isDriveable = overallSev !== 'severe' && !damages.some(d => d.affectsMechanical);
       
       resolve({
         hasDamage: damages.length > 0,
@@ -412,17 +505,18 @@ async function analyzeWithCanvas(imageData: string): Promise<DamageAnalysisResul
         overallSeverity: overallSev,
         confidence: damages.length > 0 ? damages.reduce((s, d) => s + d.confidence, 0) / damages.length : 0.5,
         impactZone: damages[0]?.zone || null,
-        impactType: damages.length > 0 ? 'unknown' : null,
+        impactType: damages.length >= 3 ? ('frontal_collision' as const) : damages.length > 0 ? ('unknown' as const) : null,
         vehicleStatus: {
-          isDriveable: overallSev !== 'severe',
-          airbagDeployed: false,
-          fluidLeak: false,
+          isDriveable,
+          airbagDeployed: overallSev === 'severe' && damages.length >= 4,
+          fluidLeak: damages.some(d => d.part === 'radiator' || (d.part === 'hood' && d.severity === 'severe')),
           structuralDamage: damages.some(d => d.affectsStructure),
           glassIntact: !damages.some(d => d.type === 'glass'),
         },
         affectedParts: parts,
         recommendations: recs,
-        repairCategory: overallSev === 'severe' ? 'major_repair' : overallSev === 'moderate' ? 'moderate_repair' : 'minor_repair',
+        repairCategory: overallSev === 'severe' ? 'major_repair' 
+          : overallSev === 'moderate' ? 'moderate_repair' : 'minor_repair',
       });
     };
     img.onerror = () => resolve(createEmptyResult());
