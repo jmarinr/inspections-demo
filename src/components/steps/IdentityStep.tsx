@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Check, AlertCircle, User, CreditCard, Calendar, Loader2, Sparkles, Edit3, Hash } from 'lucide-react';
-import { Button, Card, Badge, ProgressBar, ImageUploader, Alert } from '../ui';
+import { Button, Card, ProgressBar, ImageUploader, Alert } from '../ui';
 import { useInspectionStore } from '../../stores/inspectionStore';
 import { useOCR } from '../../hooks/useOCR';
 import { COUNTRIES } from '../../lib/constants';
