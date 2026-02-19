@@ -24,6 +24,9 @@ export interface ExtractedIdData {
   expiryDate: string;
   nationality?: string;
   gender?: string;
+  bloodType?: string;
+  birthPlace?: string;
+  issueDate?: string;
 }
 
 export interface Person {

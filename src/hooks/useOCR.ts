@@ -21,26 +21,121 @@ export function useOCR(): UseOCRResult {
   const [error, setError] = useState<string | null>(null);
   const [rawText, setRawText] = useState<string | null>(null);
 
+  // Preprocess image with canvas for better OCR on IDs with holograms/watermarks
+  const preprocessImage = useCallback(async (imageData: string, threshold: number): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const scale = Math.min(1600 / img.width, 1600 / img.height, 2);
+        canvas.width = Math.floor(img.width * scale);
+        canvas.height = Math.floor(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { resolve(imageData); return; }
+
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const px = data.data;
+
+        // Convert to grayscale, increase contrast, threshold
+        for (let i = 0; i < px.length; i += 4) {
+          const gray = px[i] * 0.299 + px[i+1] * 0.587 + px[i+2] * 0.114;
+          // Apply contrast stretch
+          const contrast = ((gray - 128) * 1.8) + 128;
+          const val = contrast < threshold ? 0 : 255;
+          px[i] = px[i+1] = px[i+2] = val;
+        }
+        ctx.putImageData(data, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = () => resolve(imageData);
+      img.src = imageData;
+    });
+  }, []);
+
   const processImage = useCallback(async (imageFile: File | string): Promise<OCRResult> => {
     setIsProcessing(true);
     setProgress(0);
     setError(null);
 
     try {
+      // Run OCR on original image first
       const result = await Tesseract.recognize(
         imageFile,
-        'spa+eng', // Spanish and English
+        'spa+eng',
         {
           logger: (m) => {
             if (m.status === 'recognizing text') {
-              setProgress(Math.round(m.progress * 100));
+              setProgress(Math.round(m.progress * 50)); // first pass = 0-50%
             }
           },
         }
       );
 
-      console.log('[OCR] Raw text extracted:', result.data.text);
-      console.log('[OCR] Confidence:', result.data.confidence);
+      console.log('[OCR] Pass 1 raw:', result.data.text.substring(0, 200));
+      console.log('[OCR] Pass 1 confidence:', result.data.confidence);
+
+      // If confidence is low OR text is short, try with preprocessing
+      const text1 = result.data.text;
+      const hasName = /[A-Z][a-z]{3,}/.test(text1) || /[A-Z]{4,}/.test(text1);
+      
+      if (typeof imageFile === 'string' && (result.data.confidence < 70 || !hasName)) {
+        console.log('[OCR] Low confidence or missing name, trying preprocessed passes...');
+        
+        let bestText = text1;
+        let bestConf = result.data.confidence;
+        let bestBlocks = result.data.blocks;
+        
+        // Try multiple threshold values
+        for (const thresh of [130, 150]) {
+          try {
+            setProgress(50 + (thresh === 130 ? 15 : 30));
+            const preprocessed = await preprocessImage(imageFile, thresh);
+            const res2 = await Tesseract.recognize(preprocessed, 'spa+eng', {
+              logger: (m) => {
+                if (m.status === 'recognizing text') {
+                  setProgress(50 + (thresh === 130 ? 15 : 30) + Math.round(m.progress * 10));
+                }
+              },
+            });
+            console.log(`[OCR] Pass thresh=${thresh}:`, res2.data.text.substring(0, 200));
+            
+            // Score: prefer text with more recognizable ID patterns
+            const score = (txt: string) => {
+              let s = 0;
+              if (/[A-Z][a-z]{3,}/.test(txt)) s += 20; // mixed case name
+              if (/\d{1,2}[-][A-Z]{3}[-]\d{4}/.test(txt)) s += 15; // date
+              if (/\d{1,2}[-]\d{2,4}[-]\d{3,6}/.test(txt)) s += 15; // cedula
+              if (/NOMBRE|FECHA|NACIMIENTO|SEXO|EXPIR/i.test(txt)) s += 10; // keywords
+              return s;
+            };
+            
+            if (score(res2.data.text) > score(bestText) || res2.data.confidence > bestConf + 5) {
+              bestText = res2.data.text;
+              bestConf = res2.data.confidence;
+              bestBlocks = res2.data.blocks;
+              console.log(`[OCR] Better result at thresh=${thresh}`);
+            }
+          } catch { /* skip failed pass */ }
+        }
+        
+        // Merge: combine unique lines from all passes for maximum coverage
+        const lines1 = new Set(text1.split('\n').map(l => l.trim()).filter(l => l.length > 3));
+        const lines2 = new Set(bestText.split('\n').map(l => l.trim()).filter(l => l.length > 3));
+        const merged = [...new Set([...lines1, ...lines2])].join('\n');
+        
+        console.log('[OCR] Merged text lines:', merged.split('\n').length);
+        
+        return {
+          text: merged,
+          confidence: bestConf,
+          blocks: bestBlocks?.map((block) => ({
+            text: block.text,
+            confidence: block.confidence,
+            bbox: block.bbox,
+          })) || [],
+        };
+      }
 
       return {
         text: result.data.text,
@@ -59,7 +154,7 @@ export function useOCR(): UseOCRResult {
       setIsProcessing(false);
       setProgress(100);
     }
-  }, []);
+  }, [preprocessImage]);
 
   const extractIdData = useCallback(async (
     frontImage: string,
@@ -164,7 +259,10 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
   "idNumber": "número de cédula/identidad con formato correcto (ej: 8-203-1365 para Panamá)",
   "birthDate": "YYYY-MM-DD",
   "expiryDate": "YYYY-MM-DD",
-  "gender": "M o F"
+  "gender": "M o F",
+  "bloodType": "tipo de sangre (ej: O+, A-, B+)",
+  "birthPlace": "lugar de nacimiento",
+  "issueDate": "YYYY-MM-DD fecha de expedición"
 }
 
 Si no puedes leer algún campo, usa cadena vacía "". Lee EXACTAMENTE lo que dice el documento.`;
@@ -194,6 +292,9 @@ Si no puedes leer algún campo, usa cadena vacía "". Lee EXACTAMENTE lo que dic
     birthDate: json.birthDate || '',
     expiryDate: json.expiryDate || '',
     gender: json.gender || undefined,
+    bloodType: json.bloodType || undefined,
+    birthPlace: json.birthPlace || undefined,
+    issueDate: json.issueDate || undefined,
     nationality: countryNames[country] ? `${countryNames[country]}` : undefined,
   };
 }
@@ -484,21 +585,83 @@ function parsePanamanianId(text: string, lines: string[], _dates: string[]): Par
     'EXPEDIDA', 'NACIONALIDAD', 'PANAMEÑA', 'PANAMENA', 'EMISION', 'EMISIÓN',
     'VENCIMIENTO', 'SANGUINEO', 'FOTO', 'FIRMA', 'AUTORIDAD', 'REGISTRO',
     'CIVIL', 'GOBIERNO', 'NACIONAL', 'DIRECCION', 'GENERAL', 'DE',
+    'BSSMA', 'BUGAR', 'BECHA', 'ECHA', 'TIPODE', 'RANAMA', 'PANAME',
+    'NAQUIENEO', 'NACIMIENEO', 'PANÑAMÁSRAÑAM',
   ]);
 
+  const fieldLabels = ['LUGAR', 'FECHA', 'NACIMIENTO', 'EXPEDIDA', 'EXPIRA',
+    'SEXO', 'SANGRE', 'NOMBRE USUAL', 'TIPO', 'EMISION'];
+
+  // ---- Strategy ZERO: Scan ALL lines for name words, filtering non-name lines ----
+  {
+    const nameCandidates: { words: string[]; score: number; line: string }[] = [];
+    
+    for (const line of lines) {
+      const upper = line.toUpperCase();
+      if (fieldLabels.some(fl => upper.includes(fl))) continue;
+      if (upper.includes('REPUBLICA') || upper.includes('TRIBUNAL') || upper.includes('ELECTORAL')) continue;
+      if ((line.match(/\d/g) || []).length > 3) continue;
+      
+      const cleaned = line
+        .replace(/[=~><\[\]{}()*#@!?;:_"'\|\\\/\d\-\.]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      
+      const words = cleaned.split(/\s+/).filter(w => {
+        if (w.length < 4) return false;
+        if (skipWordsSet.has(w.toUpperCase())) return false;
+        if (!/^[A-Za-záéíóúñÁÉÍÓÚÑ]+$/.test(w)) return false;
+        return true;
+      });
+      
+      if (words.length === 0) continue;
+      
+      let score = 0;
+      for (const w of words) {
+        if (/^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{3,}$/.test(w)) score += 10;
+        else if (/^[A-ZÁÉÍÓÚÑ]{4,}$/.test(w)) score += 5;
+        else if (w.length >= 5) score += 2;
+      }
+      
+      if (score >= 5) nameCandidates.push({ words, score, line });
+    }
+    
+    nameCandidates.sort((a, b) => b.score - a.score);
+    console.log('[OCR-PA] Strategy ZERO candidates:', nameCandidates.slice(0, 5));
+    
+    if (nameCandidates.length > 0) {
+      const allNameWords: string[] = [...nameCandidates[0].words];
+      
+      // Add unique words from other good candidates (fuzzy dedup)
+      for (const c of nameCandidates.slice(1, 3)) {
+        if (c.score < 8) break;
+        for (const w of c.words) {
+          const isDup = allNameWords.some(aw => 
+            aw.toLowerCase() === w.toLowerCase() ||
+            (aw.length >= 4 && w.length >= 4 && 
+             aw.toLowerCase().substring(0, 4) === w.toLowerCase().substring(0, 4))
+          );
+          if (!isDup && w.length >= 5) allNameWords.push(w);
+        }
+      }
+      
+      if (allNameWords.length >= 1) {
+        data.fullName = formatName(allNameWords.join(' '));
+        console.log('[OCR-PA] Strategy ZERO name:', data.fullName);
+      }
+    }
+  }
+
   // ---- Strategy PRIME: Grab all text BETWEEN header and data section ----
-  // The name is always located after "TRIBUNAL ELECTORAL" and before "NOMBRE USUAL" / "FECHA" / dates
   {
     let startIdx = -1;
     let endIdx = lines.length;
     
     for (let i = 0; i < lines.length; i++) {
       const upper = lines[i].toUpperCase();
-      // Find header end
       if (upper.includes('ELECTORAL') || upper.includes('TRIBUNAL')) {
         startIdx = i + 1;
       }
-      // Find data start
       if (startIdx >= 0 && i > startIdx) {
         if (upper.includes('NOMBRE USUAL') || upper.includes('FECHA') ||
             upper.includes('NACIMIENTO') || upper.includes('EXPEDIDA') ||
@@ -515,33 +678,44 @@ function parsePanamanianId(text: string, lines: string[], _dates: string[]): Par
     
     if (startIdx >= 0 && startIdx < endIdx) {
       const nameLines = lines.slice(startIdx, endIdx);
-      const allNameWords: string[] = [];
       
+      // For each name line, extract ONLY the left-side text (name is left-aligned, 
+      // right side has photo/hologram artifacts)
+      // Keep only first ~60% of each line to avoid photo noise
+      const cleanedLines: string[] = [];
       for (const line of nameLines) {
-        // Clean: remove digits, punctuation, OCR artifacts
-        const cleaned = line
-          .replace(/[^A-Za-záéíóúñÁÉÍÓÚÑ\s]/g, '')
+        // Remove everything after common artifact patterns
+        let cleaned = line
+          .replace(/[=~><\[\]{}()*#@!?;:_"'\|\\\/]+.*$/, '') // strip from first artifact char
+          .replace(/\s+[a-z]{1,2}\s*$/i, '') // trailing single/double letter noise
+          .replace(/\.\s*$/, '') // trailing dots
+          .replace(/[^A-Za-záéíóúñÁÉÍÓÚÑ\s]/g, '') // remove digits and punctuation
           .replace(/\s+/g, ' ')
           .trim();
-        
-        // Split into words, keep reasonable length words
-        const words = cleaned.split(/\s+/).filter(w => {
-          if (w.length < 2) return false;
-          if (skipWordsSet.has(w.toUpperCase())) return false;
-          // Must be mostly alpha
-          if (!/^[A-Za-záéíóúñÁÉÍÓÚÑ]+$/.test(w)) return false;
-          return true;
-        });
-        
-        allNameWords.push(...words);
+        if (cleaned.length >= 3) cleanedLines.push(cleaned);
       }
       
-      // Try to merge broken words (e.g. "Mar" + "garita" → "Margarita")
-      const merged = mergeFragmentedWords(allNameWords);
+      console.log('[OCR-PA] Cleaned name lines:', cleanedLines);
+      
+      // Strategy PRIME-A: Try concatenating cleaned lines and finding longest alpha sequences
+      const fullText = cleanedLines.join(' ');
+      const words = fullText.split(/\s+/).filter(w => {
+        if (w.length < 2) return false;
+        if (skipWordsSet.has(w.toUpperCase())) return false;
+        if (!/^[A-Za-záéíóúñÁÉÍÓÚÑ]+$/.test(w)) return false;
+        return true;
+      });
+      
+      // Merge fragmented words
+      const merged = mergeFragmentedWords(words);
       
       if (merged.length >= 1) {
-        data.fullName = formatName(merged.join(' '));
-        console.log('[OCR-PA] Strategy PRIME - name from zone:', data.fullName, 'words:', merged, 'raw lines:', nameLines);
+        // Filter out obvious non-name fragments (very short, or known OCR noise)
+        const nameWords = merged.filter(w => w.length >= 4 || (w.length >= 3 && /^[A-ZÁÉÍÓÚÑ]/.test(w)));
+        if (nameWords.length >= 1) {
+          data.fullName = formatName(nameWords.join(' '));
+          console.log('[OCR-PA] Strategy PRIME name:', data.fullName, 'from words:', nameWords);
+        }
       }
     }
   }
@@ -610,18 +784,34 @@ function parsePanamanianId(text: string, lines: string[], _dates: string[]): Par
 
   // ===== 3. EXTRACT DATES =====
   // Panamanian IDs use DD-MMM-YYYY format (08-OCT-1956, 01-FEB-2027)
+  // OCR often corrupts these: "0CT" for "OCT", missing year digits, noise chars
   
-  // First try keyword-based extraction (most reliable)
-  const birthMatch = text.match(/(?:NACIMIENTO|NACI)[:\s]*(\d{1,2})[-\/\s]+([A-Z]{3})[-\/\s]+(\d{4})/i);
+  // Pre-clean: fix common OCR substitutions in month names
+  const dateCleanText = text
+    .replace(/0CT/g, 'OCT').replace(/0ct/g, 'OCT')
+    .replace(/FE8/g, 'FEB').replace(/FE3/g, 'FEB')
+    .replace(/N0V/g, 'NOV').replace(/D1C/g, 'DIC')
+    .replace(/JU[NL]/gi, (m) => m.toUpperCase())
+    .replace(/[=]/g, '-'); // OCR sometimes reads dash as equals
+  
+  // Keyword-based extraction (most reliable)
+  const birthMatch = dateCleanText.match(/(?:NACIMIENTO|NACI)[:\s]*(\d{1,2})[-\/\s]+([A-Z]{3})[-\/\s]+(\d{4})/i);
   if (birthMatch) {
     data.birthDate = formatPanamanianDate(`${birthMatch[1]}-${birthMatch[2]}-${birthMatch[3]}`);
     console.log('[OCR-PA] Birth date from keyword:', data.birthDate);
   }
   
-  const expiryMatch = text.match(/EXPIRA[:\s]*(\d{1,2})[-\/\s]+([A-Z]{3})[-\/\s]+(\d{4})/i);
+  const expiryMatch = dateCleanText.match(/EXPIRA[:\s]*(\d{1,2})[-\/\s]+([A-Z]{3})[-\/\s]+(\d{4})/i);
   if (expiryMatch) {
     data.expiryDate = formatPanamanianDate(`${expiryMatch[1]}-${expiryMatch[2]}-${expiryMatch[3]}`);
     console.log('[OCR-PA] Expiry date from keyword:', data.expiryDate);
+  }
+  
+  // Also try EXPEDIDA for issue date
+  const issueMatch2 = dateCleanText.match(/EXPEDIDA[:\s]*(\d{1,2})[-\/\s]+([A-Z]{3})[-\/\s]+(\d{4})/i);
+  if (issueMatch2) {
+    data.issueDate = formatPanamanianDate(`${issueMatch2[1]}-${issueMatch2[2]}-${issueMatch2[3]}`);
+    console.log('[OCR-PA] Issue date from keyword:', data.issueDate);
   }
 
   // Fallback: scan for all DD-MMM-YYYY dates
@@ -657,6 +847,41 @@ function parsePanamanianId(text: string, lines: string[], _dates: string[]): Par
   if (genderMatch) {
     data.gender = genderMatch[1].toUpperCase();
     console.log('[OCR-PA] Gender:', data.gender);
+  } else {
+    // Fallback: look for M or F near SEXO keyword
+    const sexoIdx = text.toUpperCase().indexOf('SEXO');
+    if (sexoIdx !== -1) {
+      const nearby = text.substring(sexoIdx, sexoIdx + 15).toUpperCase();
+      if (nearby.includes('M')) data.gender = 'M';
+      else if (nearby.includes('F')) data.gender = 'F';
+      console.log('[OCR-PA] Gender (nearby):', data.gender);
+    }
+  }
+
+  // ===== 5. EXTRACT BLOOD TYPE =====
+  const bloodMatch = text.match(/(?:TIPO\s*(?:DE\s*)?SANGRE|SANGUINEO)\s*:?\s*([ABO]{1,2}[+-]?(?:\s*[+-])?)/i);
+  if (bloodMatch) {
+    data.bloodType = bloodMatch[1].replace(/\s+/g, '').toUpperCase();
+    console.log('[OCR-PA] Blood type:', data.bloodType);
+  }
+
+  // ===== 6. EXTRACT BIRTH PLACE =====
+  const birthPlaceMatch = text.match(/LUGAR\s*(?:DE\s*)?(?:NACI\w*|NAC[:\s])\s*:?\s*([A-Za-záéíóúñÁÉÍÓÚÑ\s,]+?)(?:\n|$|\d)/i);
+  if (birthPlaceMatch) {
+    let place = birthPlaceMatch[1].replace(/[^A-Za-záéíóúñÁÉÍÓÚÑ\s,]/g, '').trim();
+    // Fix common OCR errors in place names
+    place = place.replace(/RANAMA/g, 'PANAMA').replace(/PANAMÄ/g, 'PANAMA');
+    if (place.length >= 3) {
+      data.birthPlace = formatName(place);
+      console.log('[OCR-PA] Birth place:', data.birthPlace);
+    }
+  }
+
+  // ===== 7. EXTRACT ISSUE DATE =====
+  const issueMatch = text.match(/EXPEDIDA\s*:?\s*(\d{1,2})[-\/\s]+([A-Z]{3})[-\/\s]+(\d{4})/i);
+  if (issueMatch) {
+    data.issueDate = formatPanamanianDate(`${issueMatch[1]}-${issueMatch[2]}-${issueMatch[3]}`);
+    console.log('[OCR-PA] Issue date:', data.issueDate);
   }
 
   data.nationality = 'Panameña';
@@ -803,32 +1028,39 @@ function parseColombianId(text: string, lines: string[], dates: string[]): Parti
   return data;
 }
 
-// Merge OCR-fragmented words: ["Mar", "garita", "Go", "mez"] → ["Margarita", "Gomez"]
+// Merge OCR-fragmented words: ["Mar", "garita"] → ["Margarita"]
+// Only merges when it's clearly a broken word (short fragment + lowercase continuation)
 function mergeFragmentedWords(words: string[]): string[] {
   if (words.length <= 1) return words;
   
   const merged: string[] = [];
-  let current = words[0];
+  let i = 0;
   
-  for (let i = 1; i < words.length; i++) {
-    const next = words[i];
-    // Merge if: current word is short (<4 chars) AND next starts lowercase
-    // OR current ends lowercase and next starts lowercase (broken word)
-    const currentEndsLower = /[a-záéíóúñ]$/.test(current);
-    const nextStartsLower = /^[a-záéíóúñ]/.test(next);
-    const currentShort = current.length <= 3;
+  while (i < words.length) {
+    let current = words[i];
     
-    if ((currentShort && nextStartsLower) || (currentEndsLower && nextStartsLower)) {
-      current = current + next;
-    } else {
-      merged.push(current);
-      current = next;
+    // Try merging with next word(s) if current is a short fragment
+    while (i + 1 < words.length) {
+      const next = words[i + 1];
+      const nextStartsLower = /^[a-záéíóúñ]/.test(next);
+      const currentIsShort = current.length <= 3;
+      
+      // Only merge if: current is very short (<=3) AND next starts lowercase
+      // This handles "Mar" + "garita" but NOT "Gomez" + "quezhm"
+      if (currentIsShort && nextStartsLower && next.length >= 2) {
+        current = current + next;
+        i++;
+      } else {
+        break;
+      }
     }
+    
+    merged.push(current);
+    i++;
   }
-  merged.push(current);
   
-  // Filter out very short results (single chars, noise)
-  return merged.filter(w => w.length >= 3);
+  // Filter: keep words >= 3 chars that look like name parts
+  return merged.filter(w => w.length >= 3 && /^[A-Za-záéíóúñÁÉÍÓÚÑ]+$/.test(w));
 }
 
 function formatName(name: string): string {

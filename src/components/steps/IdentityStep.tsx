@@ -124,6 +124,10 @@ export const IdentityStep: React.FC = () => {
   const [idNumber, setIdNumber] = useState(inspection.insuredPerson?.identity.extractedData?.idNumber || '');
   const [birthDate, setBirthDate] = useState(inspection.insuredPerson?.identity.extractedData?.birthDate || '');
   const [expiryDate, setExpiryDate] = useState(inspection.insuredPerson?.identity.extractedData?.expiryDate || '');
+  const [gender, setGender] = useState(inspection.insuredPerson?.identity.extractedData?.gender || '');
+  const [bloodType, setBloodType] = useState(inspection.insuredPerson?.identity.extractedData?.bloodType || '');
+  const [birthPlace, setBirthPlace] = useState(inspection.insuredPerson?.identity.extractedData?.birthPlace || '');
+  const [issueDate, setIssueDate] = useState(inspection.insuredPerson?.identity.extractedData?.issueDate || '');
 
   const country = COUNTRIES.find((c) => c.code === inspection.country);
   const ocrTriggered = useRef(false);
@@ -145,6 +149,10 @@ export const IdentityStep: React.FC = () => {
         if (result.data.idNumber) setIdNumber(result.data.idNumber);
         if (result.data.birthDate) setBirthDate(result.data.birthDate);
         if (result.data.expiryDate) setExpiryDate(result.data.expiryDate);
+        if (result.data.gender) setGender(result.data.gender);
+        if (result.data.bloodType) setBloodType(result.data.bloodType);
+        if (result.data.birthPlace) setBirthPlace(result.data.birthPlace);
+        if (result.data.issueDate) setIssueDate(result.data.issueDate);
         setExtractionSuccess(true);
       }
       
@@ -389,6 +397,56 @@ export const IdentityStep: React.FC = () => {
                   style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
                 />
               </div>
+            </div>
+
+            {/* Extra fields row */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="flex items-center gap-2 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                  <User className="w-3.5 h-3.5" /> Sexo
+                </label>
+                <select value={gender} onChange={(e) => setGender(e.target.value)}
+                  className="w-full px-3 py-3 rounded-lg text-sm"
+                  style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+                >
+                  <option value="">—</option>
+                  <option value="M">Masculino</option>
+                  <option value="F">Femenino</option>
+                </select>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                  <Hash className="w-3.5 h-3.5" /> Tipo de sangre
+                </label>
+                <input type="text" value={bloodType} onChange={(e) => setBloodType(e.target.value)}
+                  placeholder="Ej: O+"
+                  className="w-full px-3 py-3 rounded-lg text-sm"
+                  style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+                />
+              </div>
+            </div>
+
+            {/* Birth place */}
+            <div>
+              <label className="flex items-center gap-2 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                <CreditCard className="w-3.5 h-3.5" /> Lugar de nacimiento
+              </label>
+              <input type="text" value={birthPlace} onChange={(e) => setBirthPlace(e.target.value)}
+                placeholder="Ciudad, Provincia"
+                className="w-full px-4 py-3 rounded-lg text-sm"
+                style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+              />
+            </div>
+
+            {/* Issue date */}
+            <div>
+              <label className="flex items-center gap-2 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                <Calendar className="w-3.5 h-3.5" /> Fecha de expedición
+              </label>
+              <input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)}
+                className="w-full px-3 py-3 rounded-lg text-sm"
+                style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+              />
             </div>
           </div>
 
