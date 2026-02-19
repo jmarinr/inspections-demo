@@ -1,10 +1,11 @@
 import React, { useRef } from 'react';
 import { 
-  Camera, AlertTriangle, X, Loader2, ShieldAlert, 
-  ChevronDown, ChevronUp, Car, AlertCircle, Wrench, MapPin, Sparkles, Target, Zap
+  Camera, AlertTriangle, X, ShieldAlert, 
+  ChevronDown, ChevronUp, AlertCircle, Wrench, MapPin, Sparkles, Target, Zap
 } from 'lucide-react';
 import { Button, Card, Alert, Badge, ProgressBar } from '../ui';
 import { useInspectionStore } from '../../stores/inspectionStore';
+import { useImageValidation } from '../../hooks/useImageValidation';
 import { 
   useDamageDetection, 
   getDamageTypeLabel, 
@@ -241,11 +242,13 @@ export const DamagePhotosStep: React.FC = () => {
     addDamagePhoto, removeDamagePhoto, updateDamagePhoto 
   } = useInspectionStore();
   const { isAnalyzing, progress, analyzeImage } = useDamageDetection();
+  const { validateImage } = useImageValidation();
   
   const damagePhotos = inspection.damagePhotos || [];
   const [expandedPhoto, setExpandedPhoto] = React.useState<string | null>(null);
   const [selectedDamage, setSelectedDamage] = React.useState<string | null>(null);
   const [isCapturing, setIsCapturing] = React.useState(false);
+  const [validationError, setValidationError] = React.useState<string | null>(null);
   
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -254,9 +257,19 @@ export const DamagePhotosStep: React.FC = () => {
     if (!file) return;
 
     setIsCapturing(true);
+    setValidationError(null);
     try {
       const compressed = await compressImage(file, { maxSizeMB: 0.8 });
       const base64 = await fileToBase64(compressed);
+      
+      // Validate
+      const validation = await validateImage(base64, 'damage');
+      if (!validation.isValid) {
+        setValidationError(validation.reason);
+        setIsCapturing(false);
+        if (inputRef.current) inputRef.current.value = '';
+        return;
+      }
       
       const newPhoto: DamagePhoto = {
         id: `damage-${Date.now()}`,
@@ -354,6 +367,14 @@ export const DamagePhotosStep: React.FC = () => {
             </div>
           </div>
         </Card>
+      )}
+
+      {/* Validation Error */}
+      {validationError && (
+        <Alert variant="warning" icon={<AlertCircle className="w-4 h-4" />}>
+          {validationError}
+          <p className="text-xs mt-1 opacity-80">Por favor sube una foto que muestre los daños del vehículo.</p>
+        </Alert>
       )}
 
       {/* Upload Button */}

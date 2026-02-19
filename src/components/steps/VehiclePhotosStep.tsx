@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, Check, Info, RotateCcw, Sparkles, Loader2, Car, Search, Hash, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Camera, Check, Info, RotateCcw, Sparkles, Loader2, Car, Search, Hash, AlertCircle, ChevronDown, ChevronUp, XCircle } from 'lucide-react';
 import { Button, Card, Alert, Badge, ProgressBar } from '../ui';
 import { useInspectionStore } from '../../stores/inspectionStore';
 import { useVehicleOCR } from '../../hooks/useVehicleOCR';
+import { useImageValidation } from '../../hooks/useImageValidation';
 import { compressImage, fileToBase64 } from '../../lib/imageUtils';
 import type { VehiclePhoto } from '../../types';
 
@@ -14,10 +15,11 @@ interface PhotoCardProps {
   onClear: () => void;
   isPlatePhoto?: boolean;
   isDashboardPhoto?: boolean;
+  validationError?: string | null;
 }
 
 const PhotoCard: React.FC<PhotoCardProps> = ({ 
-  photo, index, onCapture, onClear, isPlatePhoto, isDashboardPhoto
+  photo, index, onCapture, onClear, isPlatePhoto, isDashboardPhoto, validationError
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isCapturing, setIsCapturing] = useState(false);
@@ -40,20 +42,23 @@ const PhotoCard: React.FC<PhotoCardProps> = ({
 
   if (photo.imageUrl) {
     return (
-      <div className="relative rounded-xl overflow-hidden border-2 border-emerald-500/60 aspect-[4/3] group">
+      <div className={`relative rounded-xl overflow-hidden border-2 aspect-[4/3] group ${validationError ? 'border-red-500/80' : 'border-emerald-500/60'}`}>
         <img src={photo.imageUrl} alt={photo.label} className="w-full h-full object-cover" />
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
-        <div className="absolute top-2 left-2 flex gap-1">
-          <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center">
-            <Check className="w-3.5 h-3.5 text-white" />
+        {validationError ? (
+          <div className="absolute inset-0 bg-red-900/60 flex flex-col items-center justify-center p-2 text-center">
+            <XCircle className="w-6 h-6 text-red-300 mb-1" />
+            <p className="text-[10px] text-red-100 font-medium leading-tight">{validationError}</p>
           </div>
-          {isPlatePhoto && (
-            <Badge variant="ai" className="text-[10px]">Placa</Badge>
-          )}
-          {isDashboardPhoto && (
-            <Badge variant="ai" className="text-[10px]">VIN</Badge>
-          )}
-        </div>
+        ) : (
+          <div className="absolute top-2 left-2 flex gap-1">
+            <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center">
+              <Check className="w-3.5 h-3.5 text-white" />
+            </div>
+            {isPlatePhoto && <Badge variant="ai" className="text-[10px]">Placa</Badge>}
+            {isDashboardPhoto && <Badge variant="ai" className="text-[10px]">VIN</Badge>}
+          </div>
+        )}
         <div className="absolute bottom-0 left-0 right-0 p-2">
           <p className="text-white text-xs font-medium">{photo.label}</p>
         </div>
@@ -125,10 +130,12 @@ const AnalysisItem: React.FC<AnalysisItemProps> = ({ icon, label, value, confide
 export const VehiclePhotosStep: React.FC = () => {
   const { inspection, updateVehiclePhoto, updateInsuredVehicle, nextStep, prevStep } = useInspectionStore();
   const { progress: ocrProgress, extractPlate, extractVIN } = useVehicleOCR();
+  const { validateImage } = useImageValidation();
   
   const [analysisState, setAnalysisState] = useState<'idle' | 'running' | 'done'>('idle');
   const [analysisStep, setAnalysisStep] = useState('');
   const [showAnalysis, setShowAnalysis] = useState(true);
+  const [photoErrors, setPhotoErrors] = useState<Record<string, string | null>>({});
   
   // OCR Results
   const [detectedPlate, setDetectedPlate] = useState<string | null>(inspection.insuredVehicle?.plate || null);
@@ -146,8 +153,10 @@ export const VehiclePhotosStep: React.FC = () => {
   const photos = inspection.insuredVehicle?.photos || [];
   const capturedCount = photos.filter((p) => p.imageUrl).length;
   const totalPhotos = photos.length;
+  const validCapturedCount = photos.filter(p => p.imageUrl && !photoErrors[p.id]).length;
   const allPhotosCaptured = capturedCount === totalPhotos;
   const progressPercent = Math.round((capturedCount / totalPhotos) * 100);
+  const hasErrors = Object.values(photoErrors).some(e => !!e);
 
   // Run OCR analysis automatically when all 7 photos are captured
   const runAnalysis = useCallback(async () => {
@@ -218,18 +227,30 @@ export const VehiclePhotosStep: React.FC = () => {
     console.log('[VehicleOCR] Analysis complete');
   }, [photos, inspection.country, extractPlate, extractVIN, updateInsuredVehicle, analysisState, detectedPlate]);
 
-  // Auto-trigger analysis when all photos are captured
+  // Auto-trigger analysis when all photos are captured and valid
   useEffect(() => {
-    if (allPhotosCaptured && analysisState === 'idle') {
-      // Small delay so the user sees the last photo appear
+    if (allPhotosCaptured && !hasErrors && analysisState === 'idle') {
       const timer = setTimeout(() => runAnalysis(), 800);
       return () => clearTimeout(timer);
     }
-  }, [allPhotosCaptured, analysisState, runAnalysis]);
+  }, [allPhotosCaptured, hasErrors, analysisState, runAnalysis]);
 
-  const handlePhotoCapture = (photoId: string, imageData: string) => {
+  const handlePhotoCapture = async (photoId: string, imageData: string) => {
+    // Find the photo to get its angle for validation
+    const photo = photos.find(p => p.id === photoId);
+    const validationStep = photo?.angle === 'dashboard' ? 'vehicle_dashboard' : `vehicle_${photo?.angle || 'front'}`;
+    
+    // Validate
+    const result = await validateImage(imageData, validationStep);
+    if (!result.isValid) {
+      // Show error but still save (user can clear & retake)
+      setPhotoErrors(prev => ({ ...prev, [photoId]: result.reason }));
+      updateVehiclePhoto('insured', photoId, { imageUrl: imageData, timestamp: new Date() });
+      return;
+    }
+    
+    setPhotoErrors(prev => ({ ...prev, [photoId]: null }));
     updateVehiclePhoto('insured', photoId, { imageUrl: imageData, timestamp: new Date() });
-    // Reset analysis if photos change after analysis
     if (analysisState === 'done') {
       setAnalysisState('idle');
     }
@@ -237,6 +258,7 @@ export const VehiclePhotosStep: React.FC = () => {
 
   const handlePhotoClear = (photoId: string) => {
     updateVehiclePhoto('insured', photoId, { imageUrl: null, timestamp: undefined });
+    setPhotoErrors(prev => ({ ...prev, [photoId]: null }));
     if (analysisState === 'done') {
       setAnalysisState('idle');
     }
@@ -297,6 +319,7 @@ export const VehiclePhotosStep: React.FC = () => {
               onCapture={(data) => handlePhotoCapture(photo.id, data)}
               onClear={() => handlePhotoClear(photo.id)}
               isPlatePhoto={photo.angle === 'rear'}
+              validationError={photoErrors[photo.id] || null}
               isDashboardPhoto={photo.angle === 'dashboard'}
             />
           ))}
@@ -497,13 +520,15 @@ export const VehiclePhotosStep: React.FC = () => {
         <Button 
           fullWidth 
           onClick={handleContinue}
-          disabled={capturedCount < 5 || analysisState === 'running'}
+          disabled={validCapturedCount < 5 || analysisState === 'running' || hasErrors}
         >
           {analysisState === 'running' 
             ? 'Analizando...' 
-            : capturedCount < 5 
-              ? `Faltan ${5 - capturedCount} fotos mínimo`
-              : 'Continuar'}
+            : hasErrors
+              ? 'Corrige las fotos marcadas'
+              : validCapturedCount < 5 
+                ? `Faltan ${5 - validCapturedCount} fotos mínimo`
+                : 'Continuar'}
         </Button>
       </div>
     </div>
