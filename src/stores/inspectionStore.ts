@@ -107,18 +107,13 @@ const createEmptyVehicle = (type: 'insured' | 'third_party'): Vehicle => ({
 });
 
 const getDefaultVehiclePhotos = (): VehiclePhoto[] => [
-  { id: uuidv4(), angle: 'front', label: 'Frontal', description: 'Vista frontal completa', imageUrl: null },
-  { id: uuidv4(), angle: 'front_45_left', label: 'Frontal 45° Izq', description: 'Frontal lado conductor', imageUrl: null },
-  { id: uuidv4(), angle: 'left', label: 'Lateral Izq', description: 'Lado del conductor', imageUrl: null },
-  { id: uuidv4(), angle: 'rear_45_left', label: 'Trasera 45° Izq', description: 'Trasera lado conductor', imageUrl: null },
-  { id: uuidv4(), angle: 'rear', label: 'Trasera', description: 'Vista trasera completa', imageUrl: null },
-  { id: uuidv4(), angle: 'rear_45_right', label: 'Trasera 45° Der', description: 'Trasera lado pasajero', imageUrl: null },
-  { id: uuidv4(), angle: 'right', label: 'Lateral Der', description: 'Lado del pasajero', imageUrl: null },
-  { id: uuidv4(), angle: 'front_45_right', label: 'Frontal 45° Der', description: 'Frontal lado pasajero', imageUrl: null },
-  { id: uuidv4(), angle: 'dashboard', label: 'Tablero', description: 'Panel de instrumentos', imageUrl: null },
-  { id: uuidv4(), angle: 'interior_front', label: 'Interior delantero', description: 'Asientos delanteros', imageUrl: null },
-  { id: uuidv4(), angle: 'interior_rear', label: 'Interior trasero', description: 'Asientos traseros', imageUrl: null },
-  { id: uuidv4(), angle: 'trunk', label: 'Cajuela', description: 'Espacio de carga', imageUrl: null },
+  { id: uuidv4(), angle: 'front', label: 'Frontal', description: 'Vista frontal completa del vehículo', imageUrl: null },
+  { id: uuidv4(), angle: 'front_45_right', label: 'Frontal 45° Der', description: 'Vista frontal lado pasajero', imageUrl: null },
+  { id: uuidv4(), angle: 'right', label: 'Lateral Der', description: 'Lado del pasajero completo', imageUrl: null },
+  { id: uuidv4(), angle: 'rear', label: 'Trasera', description: 'Vista trasera con placa visible', imageUrl: null },
+  { id: uuidv4(), angle: 'left', label: 'Lateral Izq', description: 'Lado del conductor completo', imageUrl: null },
+  { id: uuidv4(), angle: 'front_45_left', label: 'Frontal 45° Izq', description: 'Vista frontal lado conductor', imageUrl: null },
+  { id: uuidv4(), angle: 'dashboard', label: 'Tablero/VIN', description: 'Tablero con odómetro y VIN visible', imageUrl: null },
 ];
 
 export const useInspectionStore = create<InspectionStore>()(

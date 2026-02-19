@@ -113,7 +113,7 @@ export const VEHICLE_YEARS = Array.from({ length: 30 }, (_, i) => CURRENT_YEAR -
 export const WIZARD_STEPS = [
   { id: 'start', title: 'Inicio', subtitle: 'Información básica' },
   { id: 'identity', title: 'Identidad', subtitle: 'Verificación del conductor' },
-  { id: 'photos', title: 'Fotografías', subtitle: 'Fotos del vehículo' },
+  { id: 'photos', title: 'Fotografías', subtitle: '7 fotos + análisis IA' },
   { id: 'vehicle', title: 'Vehículo', subtitle: 'Datos del vehículo' },
   { id: 'damage', title: 'Daños', subtitle: 'Fotos de daños' },
   { id: 'third_party', title: 'Tercero', subtitle: 'Información del tercero' },
