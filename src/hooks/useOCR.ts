@@ -325,214 +325,216 @@ function parsePanamanianId(text: string, lines: string[], _dates: string[]): Par
   const data: Partial<ExtractedIdData> = {};
   
   console.log('[OCR-PA] Parsing Panamanian ID...');
-  console.log('[OCR-PA] Raw text:', text);
+  console.log('[OCR-PA] Lines:', lines);
+
+  // Normalize text: collapse multi-spaces, fix common OCR substitutions
+  const cleanText = text
+    .replace(/[|l]/g, (c) => c) // keep as is for now
+    .replace(/\s{2,}/g, ' ');
 
   // ===== 1. EXTRACT CÉDULA NUMBER =====
-  // Tesseract often fragments the ID. Look for multiple patterns:
+  // Try progressively looser patterns
   
-  // Pattern A: Standard with dashes: 8-203-1365
-  const dashPatterns = [
-    /\b(\d{1,2})-(\d{2,4})-(\d{3,6})\b/,
-    /\b(\d{1,2})[-–](\d{2,4})[-–](\d{3,6})\b/,
-  ];
-  
-  for (const pattern of dashPatterns) {
-    const match = text.match(pattern);
-    if (match && match[1] && match[2] && match[3]) {
-      data.idNumber = `${match[1]}-${match[2]}-${match[3]}`;
-      console.log('[OCR-PA] Found ID (dashed):', data.idNumber);
-      break;
-    }
+  // Pattern A: Standard dashed format anywhere in text
+  const dashMatch = cleanText.match(/(\d{1,2})\s*[-–—]\s*(\d{2,4})\s*[-–—]\s*(\d{3,6})/);
+  if (dashMatch) {
+    data.idNumber = `${dashMatch[1]}-${dashMatch[2]}-${dashMatch[3]}`;
+    console.log('[OCR-PA] Found ID (dashed):', data.idNumber);
   }
-
-  // Pattern B: Tesseract might read spaces instead of dashes: "8 203 1365"
-  // Or embed it in another line like "TIPO DE SANGRE: N 8 203 1365"
+  
+  // Pattern B: Space-separated numbers that fit cédula format
   if (!data.idNumber) {
-    // Look for 3 consecutive number groups that fit cédula format
-    const spaceIdPattern = /\b(\d{1,2})\s+(\d{2,4})\s+(\d{3,6})\b/g;
-    let match;
-    while ((match = spaceIdPattern.exec(text)) !== null) {
-      const [, p1, p2, p3] = match;
-      const num1 = parseInt(p1);
-      const num2 = parseInt(p2);
-      const num3 = parseInt(p3);
-      // Validate: first part 1-13 (province), second 1-9999, third 1-999999
-      if (num1 >= 1 && num1 <= 13 && num2 >= 1 && num2 <= 9999 && num3 >= 1) {
-        data.idNumber = `${p1}-${p2}-${p3}`;
-        console.log('[OCR-PA] Found ID (from spaces):', data.idNumber);
-        break;
+    const allNumberGroups = cleanText.match(/\b(\d{1,2})\s+(\d{2,4})\s+(\d{3,6})\b/g);
+    if (allNumberGroups) {
+      for (const group of allNumberGroups) {
+        const parts = group.trim().split(/\s+/);
+        if (parts.length === 3) {
+          const p1 = parseInt(parts[0]);
+          if (p1 >= 1 && p1 <= 13) {
+            data.idNumber = `${parts[0]}-${parts[1]}-${parts[2]}`;
+            console.log('[OCR-PA] Found ID (spaced):', data.idNumber);
+            break;
+          }
+        }
       }
     }
   }
-  
-  // Pattern C: Look near keywords like "CEDULA", "No.", "#"
-  if (!data.idNumber) {
-    const keywordIdPattern = /(?:CEDULA|CÉDULA|No\.?|#|PERSONAL)\s*:?\s*(\d{1,2})[\s\-–]+(\d{2,4})[\s\-–]+(\d{3,6})/i;
-    const match = text.match(keywordIdPattern);
-    if (match) {
-      data.idNumber = `${match[1]}-${match[2]}-${match[3]}`;
-      console.log('[OCR-PA] Found ID (keyword):', data.idNumber);
-    }
-  }
 
-  // ===== 2. EXTRACT NAME =====
-  // Panamanian IDs have the name after institution header lines.
-  // Tesseract often fragments names across lines. We need to reconstruct.
-  
-  // Words to skip - institutional/label text
-  const skipWordsSet = new Set([
-    'REPUBLICA', 'REPÚBLICA', 'PANAMA', 'PANAMÁ', 'TRIBUNAL', 'ELECTORAL',
-    'NOMBRE', 'USUAL', 'FECHA', 'LUGAR', 'NACIMIENTO', 'MUESTRA', 'EXPIRA',
-    'SEXO', 'TIPO', 'SANGRE', 'CEDULA', 'CÉDULA', 'IDENTIDAD', 'PERSONAL',
-    'EXPEDIDA', 'NACIONALIDAD', 'PANAMEÑA', 'PANAMENA', 'EMISION', 'EMISIÓN',
-    'VENCIMIENTO', 'RH', 'SANGUINEO', 'FOTO', 'FIRMA',
-  ]);
-  
-  // Strategy 1: Look for name near "NOMBRE USUAL" or after header
-  const nameUsualIdx = text.toUpperCase().indexOf('NOMBRE USUAL');
-  if (nameUsualIdx !== -1) {
-    // Get text after "NOMBRE USUAL:" and extract the name
-    const afterNameUsual = text.substring(nameUsualIdx + 12).trim();
-    const nameLines = afterNameUsual.split('\n').map(l => l.trim()).filter(Boolean);
-    if (nameLines.length > 0) {
-      const candidateName = nameLines[0].replace(/[^A-Za-záéíóúñÁÉÍÓÚÑ\s]/g, '').trim();
-      if (candidateName.length >= 3) {
-        data.fullName = formatName(candidateName);
-        console.log('[OCR-PA] Found name after NOMBRE USUAL:', data.fullName);
-      }
-    }
-  }
-  
-  // Strategy 2: Reconstruct fragmented name from consecutive "name-like" lines
-  // After "TRIBUNAL ELECTORAL" header, look for name fragments
-  if (!data.fullName) {
-    const nameFragments: string[] = [];
-    let foundHeader = false;
-    
+  // Pattern C: Numbers embedded in noisy lines (like "N 8 203 1365" or "SANGRE 8-203-1365")
+  if (!data.idNumber) {
     for (const line of lines) {
-      const upper = line.toUpperCase().trim();
-      
-      // Mark when we pass the header
-      if (upper.includes('ELECTORAL') || upper.includes('TRIBUNAL') || upper.includes('PANAMA')) {
-        foundHeader = true;
-        continue;
-      }
-      
-      // Stop at labels/data sections
-      if (upper.includes('NACIMIENTO') || upper.includes('FECHA') || 
-          upper.includes('EXPEDIDA') || upper.includes('SEXO') ||
-          upper.includes('TIPO DE SANGRE') || upper.includes('NOMBRE USUAL')) {
-        break;
-      }
-      
-      if (!foundHeader) continue;
-      
-      // Clean the line: remove OCR artifacts like ~ > - = \ | etc.
-      const cleaned = line
-        .replace(/[~><=|\\\/\[\]{}()*#@!?.,;:0-9]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      
-      // Skip if too short or contains skip words
-      if (cleaned.length < 2) continue;
-      const words = cleaned.split(/\s+/).filter(w => w.length >= 2);
-      if (words.length === 0) continue;
-      
-      const isAllSkipWords = words.every(w => skipWordsSet.has(w.toUpperCase()));
-      if (isAllSkipWords) continue;
-      
-      // Accept words that look like name parts (mostly letters)
-      const nameWords = words.filter(w => /^[A-Za-záéíóúñÁÉÍÓÚÑ]{2,}$/.test(w));
-      if (nameWords.length > 0) {
-        nameFragments.push(...nameWords);
-      }
-    }
-    
-    if (nameFragments.length >= 2) {
-      // Filter out any remaining skip words
-      const filteredFragments = nameFragments.filter(
-        w => !skipWordsSet.has(w.toUpperCase())
-      );
-      if (filteredFragments.length >= 2) {
-        data.fullName = formatName(filteredFragments.join(' '));
-        console.log('[OCR-PA] Reconstructed name from fragments:', data.fullName, '(from:', filteredFragments, ')');
-      }
-    }
-  }
-  
-  // Strategy 3: Look for mixed case name pattern (Margarita Gomez Velazquez)
-  if (!data.fullName) {
-    const mixedCasePattern = /\b([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}){1,4})\b/g;
-    const matches = text.match(mixedCasePattern) || [];
-    for (const match of matches) {
-      const words = match.split(/\s+/);
-      if (words.length >= 2 && words.length <= 5) {
-        const hasSkip = words.some(w => skipWordsSet.has(w.toUpperCase()));
-        if (!hasSkip) {
-          data.fullName = match;
-          console.log('[OCR-PA] Found mixed case name:', data.fullName);
+      // Strip all non-digits and non-dashes, then look for pattern
+      const numbersOnly = line.replace(/[^0-9\-\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      const match = numbersOnly.match(/(\d{1,2})\s*[-]?\s*(\d{2,4})\s*[-]?\s*(\d{3,6})/);
+      if (match) {
+        const p1 = parseInt(match[1]);
+        if (p1 >= 1 && p1 <= 13 && parseInt(match[3]) > 100) {
+          data.idNumber = `${match[1]}-${match[2]}-${match[3]}`;
+          console.log('[OCR-PA] Found ID (noisy line):', data.idNumber);
           break;
         }
       }
     }
   }
 
-  // ===== 3. EXTRACT DATES =====
-  // Panamanian IDs use DD-MMM-YYYY format (08-OCT-1956, 01-FEB-2027)
-  const datePatterns = [
-    /(\d{1,2})[-\/\s]([A-Z]{3})[-\/\s](\d{4})/gi,  // 08-OCT-1956 or 01 FEB 2027
-    /(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/g,          // 08/10/1956
-  ];
-  
-  const allDates: { raw: string; type: string }[] = [];
-  
-  // Find dates near NACIMIENTO keyword for birth date
-  const birthSection = text.match(/NACIMIENTO[:\s]*(\d{1,2}[-\/\s][A-Z]{3}[-\/\s]\d{4})/i);
-  if (birthSection) {
-    allDates.push({ raw: birthSection[1], type: 'birth' });
+  // Pattern D: Scan every line for any 3 digit groups that could be a cédula
+  if (!data.idNumber) {
+    for (const line of lines) {
+      const digits = line.match(/\d+/g);
+      if (digits && digits.length >= 3) {
+        for (let i = 0; i <= digits.length - 3; i++) {
+          const p1 = parseInt(digits[i]);
+          const p2 = parseInt(digits[i+1]);
+          const p3 = parseInt(digits[i+2]);
+          if (p1 >= 1 && p1 <= 13 && p2 >= 1 && p2 <= 9999 && p3 >= 100 && p3 <= 999999) {
+            data.idNumber = `${digits[i]}-${digits[i+1]}-${digits[i+2]}`;
+            console.log('[OCR-PA] Found ID (digit scan):', data.idNumber);
+            break;
+          }
+        }
+        if (data.idNumber) break;
+      }
+    }
   }
+
+  // ===== 2. EXTRACT NAME =====
+  // Priority: Strategy 3 (mixed case) first since it's most reliable for "Margarita Gomez Velazquez"
   
-  // Find date near EXPIRA keyword
-  const expiraSection = text.match(/EXPIRA[:\s]*(\d{1,2}[-\/\s][A-Z]{3}[-\/\s]\d{4})/i);
-  if (expiraSection) {
-    allDates.push({ raw: expiraSection[1], type: 'expiry' });
-  }
-  
-  // Find date near EXPEDIDA keyword
-  const expedidaSection = text.match(/EXPEDIDA[:\s]*(\d{1,2}[-\/\s][A-Z]{3}[-\/\s]\d{4})/i);
-  if (expedidaSection) {
-    // This is the issuance date, not birth - use it only if no expiry found
-  }
-  
-  // Fallback: find all dates in order
-  if (allDates.length === 0) {
-    for (const pattern of datePatterns) {
-      let match;
-      const regex = new RegExp(pattern.source, pattern.flags);
-      while ((match = regex.exec(text)) !== null) {
-        allDates.push({ raw: match[0], type: 'unknown' });
+  const skipWordsSet = new Set([
+    'REPUBLICA', 'REPÚBLICA', 'PANAMA', 'PANAMÁ', 'TRIBUNAL', 'ELECTORAL',
+    'NOMBRE', 'USUAL', 'FECHA', 'LUGAR', 'NACIMIENTO', 'MUESTRA', 'EXPIRA',
+    'SEXO', 'TIPO', 'SANGRE', 'CEDULA', 'CÉDULA', 'IDENTIDAD', 'PERSONAL',
+    'EXPEDIDA', 'NACIONALIDAD', 'PANAMEÑA', 'PANAMENA', 'EMISION', 'EMISIÓN',
+    'VENCIMIENTO', 'SANGUINEO', 'FOTO', 'FIRMA', 'AUTORIDAD', 'REGISTRO',
+    'CIVIL', 'GOBIERNO', 'NACIONAL', 'DIRECCION', 'GENERAL',
+  ]);
+
+  // Strategy A (BEST): Find mixed-case names like "Margarita Gomez Velazquez"
+  // Tesseract often preserves the original case of the printed text
+  const mixedCasePattern = /([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{1,}){1,5})/g;
+  const mixedMatches: string[] = [];
+  let m;
+  while ((m = mixedCasePattern.exec(text)) !== null) {
+    const candidate = m[1].trim();
+    const words = candidate.split(/\s+/);
+    // Must have 2+ words, no skip words, 2+ chars each
+    if (words.length >= 2) {
+      const hasSkip = words.some(w => skipWordsSet.has(w.toUpperCase()));
+      const allNameLike = words.every(w => /^[A-ZÁÉÍÓÚÑa-záéíóúñ]{2,}$/.test(w));
+      if (!hasSkip && allNameLike) {
+        mixedMatches.push(candidate);
       }
     }
   }
   
-  console.log('[OCR-PA] Found dates:', allDates);
-  
-  // Assign dates
-  for (const d of allDates) {
-    if (d.type === 'birth') {
-      data.birthDate = formatPanamanianDate(d.raw);
-    } else if (d.type === 'expiry') {
-      data.expiryDate = formatPanamanianDate(d.raw);
+  if (mixedMatches.length > 0) {
+    // Pick the longest match (most complete name)
+    data.fullName = mixedMatches.sort((a, b) => b.length - a.length)[0];
+    console.log('[OCR-PA] Found mixed-case name:', data.fullName, 'all candidates:', mixedMatches);
+  }
+
+  // Strategy B: Look for name after "NOMBRE USUAL:" keyword
+  if (!data.fullName) {
+    const nameUsualIdx = text.toUpperCase().indexOf('NOMBRE USUAL');
+    if (nameUsualIdx !== -1) {
+      const afterKeyword = text.substring(nameUsualIdx + 12).trim();
+      const firstLine = afterKeyword.split('\n')[0]?.replace(/[^A-Za-záéíóúñÁÉÍÓÚÑ\s]/g, '').trim();
+      if (firstLine && firstLine.length >= 3) {
+        data.fullName = formatName(firstLine);
+        console.log('[OCR-PA] Found name via NOMBRE USUAL:', data.fullName);
+      }
     }
   }
   
-  // If we have untyped dates, assign by position/value
+  // Strategy C: Reconstruct from ALL CAPS name fragments after header
+  if (!data.fullName) {
+    const nameFragments: string[] = [];
+    let pastHeader = false;
+    
+    for (const line of lines) {
+      const upper = line.toUpperCase().trim();
+      
+      if (upper.includes('ELECTORAL') || upper.includes('TRIBUNAL')) {
+        pastHeader = true;
+        continue;
+      }
+      
+      if (upper.includes('NACIMIENTO') || upper.includes('FECHA') || 
+          upper.includes('EXPEDIDA') || upper.includes('SEXO') ||
+          upper.includes('TIPO DE SANGRE') || upper.includes('NOMBRE USUAL')) {
+        if (pastHeader) break;
+        continue;
+      }
+      
+      if (!pastHeader) continue;
+      
+      // Clean OCR artifacts
+      const cleaned = line.replace(/[~><=|\\\/\[\]{}()*#@!?.,;:0-9_\-"']/g, '').replace(/\s+/g, ' ').trim();
+      if (cleaned.length < 3) continue;
+      
+      const words = cleaned.split(/\s+/).filter(w => 
+        w.length >= 3 && /^[A-Za-záéíóúñÁÉÍÓÚÑ]+$/.test(w) && !skipWordsSet.has(w.toUpperCase())
+      );
+      
+      if (words.length > 0) nameFragments.push(...words);
+    }
+    
+    if (nameFragments.length >= 2) {
+      data.fullName = formatName(nameFragments.join(' '));
+      console.log('[OCR-PA] Reconstructed name:', data.fullName, 'fragments:', nameFragments);
+    }
+  }
+
+  // Strategy D: Brute force - find ANY line with 2+ consecutive alpha words ≥3 chars
+  if (!data.fullName) {
+    for (const line of lines) {
+      const cleaned = line.replace(/[^A-Za-záéíóúñÁÉÍÓÚÑ\s]/g, '').trim();
+      const words = cleaned.split(/\s+/).filter(w => w.length >= 3 && !skipWordsSet.has(w.toUpperCase()));
+      if (words.length >= 2 && words.length <= 5) {
+        data.fullName = formatName(words.join(' '));
+        console.log('[OCR-PA] Found name (brute force):', data.fullName);
+        break;
+      }
+    }
+  }
+
+  // ===== 3. EXTRACT DATES =====
+  // Panamanian IDs use DD-MMM-YYYY format (08-OCT-1956, 01-FEB-2027)
+  
+  // First try keyword-based extraction (most reliable)
+  const birthMatch = text.match(/(?:NACIMIENTO|NACI)[:\s]*(\d{1,2})[-\/\s]+([A-Z]{3})[-\/\s]+(\d{4})/i);
+  if (birthMatch) {
+    data.birthDate = formatPanamanianDate(`${birthMatch[1]}-${birthMatch[2]}-${birthMatch[3]}`);
+    console.log('[OCR-PA] Birth date from keyword:', data.birthDate);
+  }
+  
+  const expiryMatch = text.match(/EXPIRA[:\s]*(\d{1,2})[-\/\s]+([A-Z]{3})[-\/\s]+(\d{4})/i);
+  if (expiryMatch) {
+    data.expiryDate = formatPanamanianDate(`${expiryMatch[1]}-${expiryMatch[2]}-${expiryMatch[3]}`);
+    console.log('[OCR-PA] Expiry date from keyword:', data.expiryDate);
+  }
+
+  // Fallback: scan for all DD-MMM-YYYY dates
   if (!data.birthDate || !data.expiryDate) {
-    const untypedDates = allDates.filter(d => d.type === 'unknown');
-    for (const d of untypedDates) {
-      const formatted = formatPanamanianDate(d.raw);
+    const dateRegex = /(\d{1,2})[-\/\s]+([A-Z]{3})[-\/\s]+(\d{4})/gi;
+    const foundDates: string[] = [];
+    let dm;
+    while ((dm = dateRegex.exec(text)) !== null) {
+      foundDates.push(`${dm[1]}-${dm[2]}-${dm[3]}`);
+    }
+    
+    // Also look for numeric dates DD/MM/YYYY
+    const numDateRegex = /(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/g;
+    while ((dm = numDateRegex.exec(text)) !== null) {
+      foundDates.push(`${dm[1]}/${dm[2]}/${dm[3]}`);
+    }
+    
+    console.log('[OCR-PA] All found dates:', foundDates);
+    
+    for (const d of foundDates) {
+      const formatted = formatPanamanianDate(d);
       const year = parseInt(formatted.split('-')[0] || '0');
-      if (!data.birthDate && year < 2010) {
+      if (!data.birthDate && year > 1920 && year < 2010) {
         data.birthDate = formatted;
       } else if (!data.expiryDate && year >= 2020) {
         data.expiryDate = formatted;
@@ -543,13 +545,12 @@ function parsePanamanianId(text: string, lines: string[], _dates: string[]): Par
   // ===== 4. EXTRACT GENDER =====
   const genderMatch = text.match(/SEXO\s*:?\s*([MF])/i);
   if (genderMatch) {
-    data.gender = genderMatch[1].toUpperCase() as 'M' | 'F';
-    console.log('[OCR-PA] Found gender:', data.gender);
+    data.gender = genderMatch[1].toUpperCase();
+    console.log('[OCR-PA] Gender:', data.gender);
   }
 
   data.nationality = 'Panameña';
-
-  console.log('[OCR-PA] Final parsed data:', data);
+  console.log('[OCR-PA] FINAL:', data);
   return data;
 }
 

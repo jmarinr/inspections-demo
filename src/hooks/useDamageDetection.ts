@@ -106,6 +106,44 @@ export const IMPACT_TYPE_LABELS: Record<string, string> = {
   rollover: 'Volcadura', scrape: 'Raspón/Roce', unknown: 'Indeterminado',
 };
 
+// ===== CLAUDE API PROMPT =====
+const DAMAGE_ANALYSIS_PROMPT = `Eres un perito de seguros experto en evaluación de daños vehiculares. Analiza esta foto de un vehículo y detecta TODOS los daños visibles.
+
+IMPORTANTE: Solo reporta daños que REALMENTE puedes ver en la imagen. No inventes daños que no existen. Si no ves daños, indica que no hay daños visibles.
+
+Responde SOLO con un JSON válido (sin markdown, sin backticks) con esta estructura exacta:
+
+{
+  "hasDamage": boolean,
+  "impactZone": "frontal" | "rear" | "lateral_left" | "lateral_right" | "roof" | null,
+  "impactType": "frontal_collision" | "rear_collision" | "side_impact" | "scrape" | "unknown" | null,
+  "overallSeverity": "none" | "minor" | "moderate" | "severe" | "total_loss",
+  "isDriveable": boolean,
+  "airbagDeployed": boolean,
+  "fluidLeak": boolean,
+  "structuralDamage": boolean,
+  "glassIntact": boolean,
+  "damages": [
+    {
+      "type": "scratch" | "dent" | "crack" | "broken" | "paint" | "deformation" | "glass" | "puncture" | "corrosion",
+      "severity": "minor" | "moderate" | "severe",
+      "part": string (usar: hood, trunk, front_bumper, rear_bumper, front_fender_left, front_fender_right, rear_fender_left, rear_fender_right, front_door_left, front_door_right, rear_door_left, rear_door_right, side_panel_left, side_panel_right, headlight_left, headlight_right, taillight_left, taillight_right, windshield, rear_window, mirror_left, mirror_right, grille, wheel_front_left, wheel_front_right, frame),
+      "zone": "frontal" | "rear" | "lateral_left" | "lateral_right",
+      "side": "left" | "right" | "center" | "front" | "rear",
+      "confidence": number (0-1),
+      "description": string (descripción en español del daño visible),
+      "estimatedRepair": "paintless_repair" | "body_repair" | "part_replacement" | "structural_repair",
+      "affectsStructure": boolean,
+      "affectsMechanical": boolean,
+      "affectsSafety": boolean,
+      "boundingBox": { "x": number (0-1 centro), "y": number (0-1 centro), "width": number (0-1), "height": number (0-1) }
+    }
+  ],
+  "recommendations": [string] (recomendaciones en español)
+}
+
+Para boundingBox: usa coordenadas normalizadas 0-1 donde (0,0) es esquina superior izquierda. x,y es el CENTRO del box. Sé preciso ubicando cada daño donde realmente está en la imagen.`;
+
 // ===== HOOK PRINCIPAL =====
 export function useDamageDetection() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -118,17 +156,15 @@ export function useDamageDetection() {
     setError(null);
 
     try {
-      setProgress(15); await new Promise(r => setTimeout(r, 300));
-      setProgress(35); await new Promise(r => setTimeout(r, 400));
-      setProgress(60); await new Promise(r => setTimeout(r, 500));
-      setProgress(85); await new Promise(r => setTimeout(r, 400));
-      setProgress(95); await new Promise(r => setTimeout(r, 200));
-
-      const result = performAnalysis(imageData);
+      setProgress(10);
+      
+      // Try Claude API first
+      const result = await analyzeWithClaude(imageData, (p) => setProgress(p));
       setProgress(100);
       return result;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error');
+      console.warn('[DamageDetection] Claude API failed, using fallback:', err);
+      setError(err instanceof Error ? err.message : 'Error al analizar');
       return createEmptyResult();
     } finally {
       setIsAnalyzing(false);
@@ -138,161 +174,119 @@ export function useDamageDetection() {
   return { isAnalyzing, progress, error, analyzeImage };
 }
 
-// ===== ANÁLISIS =====
-function performAnalysis(imageData: string): DamageAnalysisResult {
-  const hash = simpleHash(imageData);
-  const scenarios = ['frontal_severe', 'lateral_left', 'lateral_right', 'rear_minor', 'scrape_fender', 'mixed'] as const;
-  return generateResult(scenarios[hash % scenarios.length], hash);
-}
+// ===== CLAUDE API ANALYSIS =====
+async function analyzeWithClaude(
+  imageData: string,
+  onProgress: (p: number) => void
+): Promise<DamageAnalysisResult> {
+  onProgress(15);
+  
+  // Extract base64 and media type
+  const mediaTypeMatch = imageData.match(/^data:(image\/\w+);base64,/);
+  const mediaType = mediaTypeMatch ? mediaTypeMatch[1] : 'image/jpeg';
+  const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
+  
+  onProgress(25);
 
-function simpleHash(str: string): number {
-  let h = 0;
-  for (let i = 0; i < Math.min(str.length, 1000); i++) {
-    h = ((h << 5) - h) + str.charCodeAt(i);
-    h = h & h;
-  }
-  return Math.abs(h);
-}
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2000,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: mediaType, data: base64Data }
+          },
+          { type: 'text', text: DAMAGE_ANALYSIS_PROMPT }
+        ]
+      }]
+    })
+  });
 
-function generateResult(scenario: string, _hash: number): DamageAnalysisResult {
-  const damages: DamageDetection[] = [];
-  const status = { isDriveable: true, airbagDeployed: false, fluidLeak: false, structuralDamage: false, glassIntact: true };
-  const parts = { exterior: [] as string[], mechanical: [] as string[], glass: [] as string[], structural: [] as string[] };
-  let zone: VehicleZone | null = null;
-  let impact: DamageAnalysisResult['impactType'] = null;
-  let severity: DamageSeverity = 'minor';
+  onProgress(70);
 
-  switch (scenario) {
-    case 'frontal_severe':
-      zone = 'frontal'; impact = 'frontal_collision'; severity = 'severe';
-      status.isDriveable = false; status.airbagDeployed = true; status.fluidLeak = true; status.structuralDamage = true;
-      damages.push(
-        mkDmg('deformation', 'severe', 'hood', 'frontal', 'center', 'Capó completamente deformado y levantado por impacto frontal', 0.95, { struct: true, rep: 'part_replacement', x: 0.5, y: 0.25 }),
-        mkDmg('broken', 'severe', 'front_bumper', 'frontal', 'center', 'Parachoques delantero destruido, desprendido del chasis', 0.97, { struct: true, rep: 'part_replacement', x: 0.5, y: 0.75 }),
-        mkDmg('deformation', 'severe', 'front_fender_left', 'frontal', 'left', 'Guardafango delantero izquierdo con deformación severa', 0.92, { rep: 'part_replacement', x: 0.2, y: 0.4 }),
-        mkDmg('broken', 'severe', 'grille', 'frontal', 'center', 'Parrilla frontal destruida', 0.94, { rep: 'part_replacement', x: 0.5, y: 0.55 }),
-        mkDmg('broken', 'severe', 'headlight_left', 'frontal', 'left', 'Faro delantero izquierdo destruido', 0.91, { rep: 'part_replacement', x: 0.25, y: 0.45 }),
-        mkDmg('broken', 'moderate', 'radiator', 'frontal', 'center', 'Radiador dañado con fuga de refrigerante', 0.85, { mech: true, rep: 'part_replacement', x: 0.5, y: 0.65 }),
-        mkDmg('deformation', 'severe', 'frame', 'frontal', 'center', 'Daño estructural al chasis frontal', 0.78, { struct: true, safety: true, rep: 'structural_repair', x: 0.5, y: 0.85 })
-      );
-      parts.exterior = ['Capó', 'Parachoques del.', 'Guardafango izq.', 'Parrilla', 'Faro izq.'];
-      parts.mechanical = ['Radiador', 'Motor (verificar)'];
-      parts.structural = ['Chasis frontal'];
-      break;
-
-    case 'lateral_left':
-      zone = 'lateral_left'; impact = 'side_impact'; severity = 'moderate';
-      damages.push(
-        mkDmg('dent', 'moderate', 'rear_door_left', 'lateral_left', 'left', 'Abolladura grande en puerta trasera izquierda por impacto lateral', 0.94, { rep: 'body_repair', x: 0.55, y: 0.5 }),
-        mkDmg('dent', 'minor', 'front_door_left', 'lateral_left', 'left', 'Abolladura menor en puerta delantera izquierda', 0.88, { rep: 'paintless_repair', x: 0.3, y: 0.5 }),
-        mkDmg('paint', 'moderate', 'side_panel_left', 'lateral_left', 'left', 'Daño de pintura extenso en panel lateral izquierdo', 0.91, { rep: 'body_repair', x: 0.45, y: 0.6 }),
-        mkDmg('scratch', 'minor', 'rear_fender_left', 'lateral_left', 'left', 'Rayones en guardafango trasero izquierdo', 0.86, { rep: 'body_repair', x: 0.75, y: 0.55 })
-      );
-      parts.exterior = ['Puerta tras. izq.', 'Puerta del. izq.', 'Panel lateral izq.', 'Guardafango tras. izq.'];
-      break;
-
-    case 'lateral_right':
-      zone = 'lateral_right'; impact = 'side_impact'; severity = 'moderate';
-      damages.push(
-        mkDmg('dent', 'moderate', 'front_door_right', 'lateral_right', 'right', 'Abolladura en puerta delantera derecha', 0.92, { rep: 'body_repair', x: 0.35, y: 0.5 }),
-        mkDmg('dent', 'minor', 'rear_door_right', 'lateral_right', 'right', 'Abolladura menor en puerta trasera derecha', 0.87, { rep: 'paintless_repair', x: 0.6, y: 0.5 }),
-        mkDmg('scratch', 'minor', 'side_panel_right', 'lateral_right', 'right', 'Rayones en panel lateral derecho', 0.84, { rep: 'body_repair', x: 0.5, y: 0.55 })
-      );
-      parts.exterior = ['Puerta del. der.', 'Puerta tras. der.', 'Panel lateral der.'];
-      break;
-
-    case 'scrape_fender':
-      zone = 'lateral_left'; impact = 'scrape'; severity = 'minor';
-      damages.push(
-        mkDmg('scratch', 'minor', 'front_fender_left', 'lateral_left', 'left', 'Rayones superficiales en guardafango delantero izquierdo', 0.93, { rep: 'body_repair', x: 0.4, y: 0.45 }),
-        mkDmg('paint', 'minor', 'front_fender_left', 'lateral_left', 'left', 'Pérdida de pintura en área del guardafango', 0.89, { rep: 'body_repair', x: 0.35, y: 0.55 }),
-        mkDmg('dent', 'minor', 'front_bumper', 'frontal', 'left', 'Pequeña abolladura en esquina del parachoques', 0.82, { rep: 'paintless_repair', x: 0.2, y: 0.7 })
-      );
-      parts.exterior = ['Guardafango del. izq.', 'Parachoques del.'];
-      break;
-
-    case 'rear_minor':
-      zone = 'rear'; impact = 'rear_collision'; severity = 'minor';
-      damages.push(
-        mkDmg('dent', 'minor', 'rear_bumper', 'rear', 'center', 'Abolladura en parachoques trasero', 0.91, { rep: 'paintless_repair', x: 0.5, y: 0.6 }),
-        mkDmg('scratch', 'minor', 'trunk', 'rear', 'center', 'Rayones menores en tapa del maletero', 0.85, { rep: 'body_repair', x: 0.5, y: 0.35 }),
-        mkDmg('crack', 'minor', 'taillight_left', 'rear', 'left', 'Grieta en faro trasero izquierdo', 0.79, { rep: 'part_replacement', x: 0.25, y: 0.5 })
-      );
-      parts.exterior = ['Parachoques tras.', 'Maletero', 'Faro tras. izq.'];
-      break;
-
-    default:
-      zone = 'frontal'; impact = 'frontal_collision'; severity = 'moderate';
-      status.isDriveable = false;
-      damages.push(
-        mkDmg('dent', 'moderate', 'hood', 'frontal', 'center', 'Abolladura moderada en capó', 0.90, { rep: 'body_repair', x: 0.5, y: 0.3 }),
-        mkDmg('broken', 'moderate', 'front_bumper', 'frontal', 'center', 'Parachoques delantero dañado', 0.88, { rep: 'part_replacement', x: 0.5, y: 0.7 }),
-        mkDmg('crack', 'minor', 'headlight_right', 'frontal', 'right', 'Grieta en faro delantero derecho', 0.82, { rep: 'part_replacement', x: 0.75, y: 0.5 })
-      );
-      parts.exterior = ['Capó', 'Parachoques del.', 'Faro der.'];
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error('[DamageDetection] API error:', response.status, errText);
+    throw new Error(`API error ${response.status}`);
   }
 
-  const recs = genRecs(damages, status, severity);
-  const repCat = detRepCat(damages, severity);
+  const data = await response.json();
+  onProgress(85);
 
-  return {
-    hasDamage: damages.length > 0,
-    damages,
-    overallSeverity: damages.length > 0 ? severity : 'none',
-    confidence: damages.length > 0 ? damages.reduce((s, d) => s + d.confidence, 0) / damages.length : 0.95,
-    impactZone: zone,
-    impactType: impact,
-    vehicleStatus: status,
-    affectedParts: parts,
-    recommendations: recs,
-    repairCategory: repCat,
-  };
+  // Extract text response
+  const textContent = data.content?.find((c: any) => c.type === 'text')?.text || '';
+  console.log('[DamageDetection] Claude response:', textContent);
+
+  // Parse JSON from response
+  const jsonStr = textContent.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+  const parsed = JSON.parse(jsonStr);
+  
+  onProgress(95);
+  return mapClaudeResponse(parsed);
 }
 
-interface DmgOpts { struct?: boolean; mech?: boolean; safety?: boolean; rep: DamageDetection['estimatedRepair']; x?: number; y?: number; w?: number; h?: number; }
-
-function mkDmg(type: DamageType, sev: DamageSeverity, part: VehiclePart, zone: VehicleZone, side: DamageDetection['side'], desc: string, conf: number, o: DmgOpts): DamageDetection {
-  // Vary bounding box size based on severity
-  const baseSize = sev === 'severe' ? 0.22 : sev === 'moderate' ? 0.16 : 0.11;
-  return {
-    id: `dmg-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-    type, severity: sev, part, zone, side, confidence: conf, description: desc,
-    estimatedRepair: o.rep,
-    affectsStructure: o.struct || false,
-    affectsMechanical: o.mech || false,
-    affectsSafety: o.safety || sev === 'severe' || sev === 'total_loss',
-    boundingBox: o.x !== undefined ? { 
-      x: o.x, 
-      y: o.y || 0.5, 
-      width: o.w || baseSize + (Math.random() * 0.04), 
-      height: o.h || baseSize + (Math.random() * 0.04) 
+// ===== MAP CLAUDE RESPONSE TO OUR TYPES =====
+function mapClaudeResponse(raw: any): DamageAnalysisResult {
+  const damages: DamageDetection[] = (raw.damages || []).map((d: any, idx: number) => ({
+    id: `dmg-${Date.now()}-${idx}`,
+    type: d.type || 'dent',
+    severity: d.severity || 'minor',
+    part: d.part || 'front_bumper',
+    zone: d.zone || 'frontal',
+    side: d.side || 'center',
+    confidence: d.confidence || 0.8,
+    description: d.description || 'Daño detectado',
+    estimatedRepair: d.estimatedRepair || 'body_repair',
+    affectsStructure: d.affectsStructure || false,
+    affectsMechanical: d.affectsMechanical || false,
+    affectsSafety: d.affectsSafety || false,
+    boundingBox: d.boundingBox ? {
+      x: d.boundingBox.x,
+      y: d.boundingBox.y,
+      width: d.boundingBox.width || 0.12,
+      height: d.boundingBox.height || 0.12,
     } : undefined,
+  }));
+
+  const severity = raw.overallSeverity || 'none';
+  const parts = { exterior: [] as string[], mechanical: [] as string[], glass: [] as string[], structural: [] as string[] };
+  
+  for (const d of damages) {
+    const label = VEHICLE_PART_LABELS[d.part] || d.part;
+    if (d.type === 'glass') parts.glass.push(label);
+    else if (d.affectsStructure) parts.structural.push(label);
+    else if (d.affectsMechanical) parts.mechanical.push(label);
+    else parts.exterior.push(label);
+  }
+
+  const repairCategory = severity === 'total_loss' ? 'total_loss' as const
+    : damages.some(d => d.affectsStructure) ? 'major_repair' as const
+    : severity === 'severe' || severity === 'moderate' ? 'moderate_repair' as const
+    : 'minor_repair' as const;
+
+  return {
+    hasDamage: raw.hasDamage ?? damages.length > 0,
+    damages,
+    overallSeverity: severity,
+    confidence: damages.length > 0 ? damages.reduce((s, d) => s + d.confidence, 0) / damages.length : 0.95,
+    impactZone: raw.impactZone || null,
+    impactType: raw.impactType || null,
+    vehicleStatus: {
+      isDriveable: raw.isDriveable ?? true,
+      airbagDeployed: raw.airbagDeployed ?? false,
+      fluidLeak: raw.fluidLeak ?? false,
+      structuralDamage: raw.structuralDamage ?? false,
+      glassIntact: raw.glassIntact ?? true,
+    },
+    affectedParts: parts,
+    recommendations: raw.recommendations || [],
+    repairCategory,
   };
-}
-
-function genRecs(dmg: DamageDetection[], st: DamageAnalysisResult['vehicleStatus'], sev: DamageSeverity): string[] {
-  const r: string[] = [];
-  if (!st.isDriveable) r.push('⚠️ Vehículo NO conducible - requiere grúa');
-  if (st.airbagDeployed) r.push('🚨 Airbag desplegado - inspección de seguridad requerida');
-  if (st.fluidLeak) r.push('💧 Fuga de fluidos - no encender motor');
-  if (st.structuralDamage) r.push('🔧 Daño estructural - taller especializado');
-  if (sev === 'severe' || sev === 'total_loss') r.push('📋 Requiere evaluación presencial por ajustador');
-  if (dmg.some(d => d.affectsMechanical)) r.push('🔩 Verificar componentes mecánicos');
-  if (dmg.some(d => d.type === 'glass')) r.push('🪟 No operar con vidrios dañados');
-  if (dmg.some(d => d.affectsStructure)) r.push('🏗️ Reparación estructural especializada');
-  if (sev === 'minor' && dmg.length > 0) r.push('✅ Daños menores - reparación estándar');
-  if (dmg.length === 0) r.push('✅ No se detectaron daños visibles');
-  return r;
-}
-
-function detRepCat(dmg: DamageDetection[], sev: DamageSeverity): DamageAnalysisResult['repairCategory'] {
-  if (sev === 'total_loss') return 'total_loss';
-  const struct = dmg.some(d => d.affectsStructure);
-  const mech = dmg.some(d => d.affectsMechanical);
-  const sevCnt = dmg.filter(d => d.severity === 'severe').length;
-  if (struct || sevCnt >= 3) return 'major_repair';
-  if (mech || sevCnt >= 1 || sev === 'moderate') return 'moderate_repair';
-  return 'minor_repair';
 }
 
 function createEmptyResult(): DamageAnalysisResult {
@@ -301,14 +295,14 @@ function createEmptyResult(): DamageAnalysisResult {
     impactZone: null, impactType: null,
     vehicleStatus: { isDriveable: true, airbagDeployed: false, fluidLeak: false, structuralDamage: false, glassIntact: true },
     affectedParts: { exterior: [], mechanical: [], glass: [], structural: [] },
-    recommendations: [], repairCategory: 'minor_repair',
+    recommendations: ['No se pudo analizar la imagen. Intenta con otra foto.'], repairCategory: 'minor_repair',
   };
 }
 
 // ===== UTILIDADES =====
-export const getDamageTypeLabel = (t: DamageType) => DAMAGE_TYPE_LABELS[t];
-export const getPartLabel = (p: VehiclePart) => VEHICLE_PART_LABELS[p];
-export const getZoneLabel = (z: VehicleZone) => ZONE_LABELS[z];
-export const getSeverityLabel = (s: DamageSeverity) => SEVERITY_LABELS[s];
-export const getSeverityColor = (s: DamageSeverity | 'none') => SEVERITY_COLORS[s];
+export const getDamageTypeLabel = (t: DamageType) => DAMAGE_TYPE_LABELS[t] || t;
+export const getPartLabel = (p: VehiclePart) => VEHICLE_PART_LABELS[p] || p;
+export const getZoneLabel = (z: VehicleZone) => ZONE_LABELS[z] || z;
+export const getSeverityLabel = (s: DamageSeverity) => SEVERITY_LABELS[s] || s;
+export const getSeverityColor = (s: DamageSeverity | 'none') => SEVERITY_COLORS[s] || '';
 export const getImpactTypeLabel = (t: string) => IMPACT_TYPE_LABELS[t] || t;
