@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronLeft, X } from 'lucide-react';
+import { ChevronLeft, RotateCcw } from 'lucide-react';
 import { useInspectionStore } from '../../stores/inspectionStore';
 import { ProgressBar, ThemeToggle } from '../ui';
 import { WIZARD_STEPS } from '../../lib/constants';
@@ -9,7 +9,7 @@ interface WizardLayoutProps {
 }
 
 export const WizardLayout: React.FC<WizardLayoutProps> = ({ children }) => {
-  const { currentStep, prevStep } = useInspectionStore();
+  const { currentStep, prevStep, resetInspection } = useInspectionStore();
 
   if (currentStep === 0) {
     return <>{children}</>;
@@ -25,9 +25,9 @@ export const WizardLayout: React.FC<WizardLayoutProps> = ({ children }) => {
     }
   };
 
-  const handleClose = () => {
-    if (confirm('¿Seguro que quieres salir? Tu progreso se guardará localmente.')) {
-      window.location.hash = '/';
+  const handleRestart = () => {
+    if (confirm('¿Reiniciar la inspección? Se perderá todo el progreso.')) {
+      resetInspection();
     }
   };
 
@@ -56,11 +56,12 @@ export const WizardLayout: React.FC<WizardLayoutProps> = ({ children }) => {
           <div className="flex items-center gap-1">
             <ThemeToggle />
             <button
-              onClick={handleClose}
+              onClick={handleRestart}
               className="p-2 -mr-2 rounded-lg transition-colors"
               style={{ color: 'var(--text-muted)' }}
+              title="Reiniciar inspección"
             >
-              <X className="w-5 h-5" />
+              <RotateCcw className="w-5 h-5" />
             </button>
           </div>
         </div>
