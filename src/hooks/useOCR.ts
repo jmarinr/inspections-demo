@@ -477,103 +477,134 @@ function parsePanamanianId(text: string, lines: string[], _dates: string[]): Par
   }
 
   // ===== 2. EXTRACT NAME =====
-  // Priority: Strategy 3 (mixed case) first since it's most reliable for "Margarita Gomez Velazquez"
-  
   const skipWordsSet = new Set([
     'REPUBLICA', 'REPÚBLICA', 'PANAMA', 'PANAMÁ', 'TRIBUNAL', 'ELECTORAL',
     'NOMBRE', 'USUAL', 'FECHA', 'LUGAR', 'NACIMIENTO', 'MUESTRA', 'EXPIRA',
     'SEXO', 'TIPO', 'SANGRE', 'CEDULA', 'CÉDULA', 'IDENTIDAD', 'PERSONAL',
     'EXPEDIDA', 'NACIONALIDAD', 'PANAMEÑA', 'PANAMENA', 'EMISION', 'EMISIÓN',
     'VENCIMIENTO', 'SANGUINEO', 'FOTO', 'FIRMA', 'AUTORIDAD', 'REGISTRO',
-    'CIVIL', 'GOBIERNO', 'NACIONAL', 'DIRECCION', 'GENERAL',
+    'CIVIL', 'GOBIERNO', 'NACIONAL', 'DIRECCION', 'GENERAL', 'DE',
   ]);
 
-  // Strategy A (BEST): Find mixed-case names like "Margarita Gomez Velazquez"
-  // Tesseract often preserves the original case of the printed text
-  const mixedCasePattern = /([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{1,}){1,5})/g;
-  const mixedMatches: string[] = [];
-  let m;
-  while ((m = mixedCasePattern.exec(text)) !== null) {
-    const candidate = m[1].trim();
-    const words = candidate.split(/\s+/);
-    // Must have 2+ words, no skip words, 2+ chars each
-    if (words.length >= 2) {
-      const hasSkip = words.some(w => skipWordsSet.has(w.toUpperCase()));
-      const allNameLike = words.every(w => /^[A-ZÁÉÍÓÚÑa-záéíóúñ]{2,}$/.test(w));
-      if (!hasSkip && allNameLike) {
-        mixedMatches.push(candidate);
+  // ---- Strategy PRIME: Grab all text BETWEEN header and data section ----
+  // The name is always located after "TRIBUNAL ELECTORAL" and before "NOMBRE USUAL" / "FECHA" / dates
+  {
+    let startIdx = -1;
+    let endIdx = lines.length;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const upper = lines[i].toUpperCase();
+      // Find header end
+      if (upper.includes('ELECTORAL') || upper.includes('TRIBUNAL')) {
+        startIdx = i + 1;
+      }
+      // Find data start
+      if (startIdx >= 0 && i > startIdx) {
+        if (upper.includes('NOMBRE USUAL') || upper.includes('FECHA') ||
+            upper.includes('NACIMIENTO') || upper.includes('EXPEDIDA') ||
+            upper.includes('SEXO:') || upper.includes('TIPO DE SANGRE') ||
+            /\d{1,2}[-\/][A-Z]{3}[-\/]\d{4}/i.test(lines[i]) ||
+            /\d{1,2}[-]\d{2,4}[-]\d{3,6}/.test(lines[i])) {
+          endIdx = i;
+          break;
+        }
+      }
+    }
+    
+    console.log('[OCR-PA] Name zone: lines', startIdx, 'to', endIdx, 'of', lines.length);
+    
+    if (startIdx >= 0 && startIdx < endIdx) {
+      const nameLines = lines.slice(startIdx, endIdx);
+      const allNameWords: string[] = [];
+      
+      for (const line of nameLines) {
+        // Clean: remove digits, punctuation, OCR artifacts
+        const cleaned = line
+          .replace(/[^A-Za-záéíóúñÁÉÍÓÚÑ\s]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        
+        // Split into words, keep reasonable length words
+        const words = cleaned.split(/\s+/).filter(w => {
+          if (w.length < 2) return false;
+          if (skipWordsSet.has(w.toUpperCase())) return false;
+          // Must be mostly alpha
+          if (!/^[A-Za-záéíóúñÁÉÍÓÚÑ]+$/.test(w)) return false;
+          return true;
+        });
+        
+        allNameWords.push(...words);
+      }
+      
+      // Try to merge broken words (e.g. "Mar" + "garita" → "Margarita")
+      const merged = mergeFragmentedWords(allNameWords);
+      
+      if (merged.length >= 1) {
+        data.fullName = formatName(merged.join(' '));
+        console.log('[OCR-PA] Strategy PRIME - name from zone:', data.fullName, 'words:', merged, 'raw lines:', nameLines);
       }
     }
   }
-  
-  if (mixedMatches.length > 0) {
-    // Pick the longest match (most complete name)
-    data.fullName = mixedMatches.sort((a, b) => b.length - a.length)[0];
-    console.log('[OCR-PA] Found mixed-case name:', data.fullName, 'all candidates:', mixedMatches);
+
+  // ---- Strategy A: Mixed-case pattern (multi-word on same line) ----
+  if (!data.fullName) {
+    const mixedCasePattern = /([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{1,}){1,5})/g;
+    const mixedMatches: string[] = [];
+    let m;
+    while ((m = mixedCasePattern.exec(text)) !== null) {
+      const candidate = m[1].trim();
+      const words = candidate.split(/\s+/);
+      if (words.length >= 2) {
+        const hasSkip = words.some(w => skipWordsSet.has(w.toUpperCase()));
+        if (!hasSkip) mixedMatches.push(candidate);
+      }
+    }
+    if (mixedMatches.length > 0) {
+      data.fullName = mixedMatches.sort((a, b) => b.length - a.length)[0];
+      console.log('[OCR-PA] Strategy A - mixed-case:', data.fullName);
+    }
   }
 
-  // Strategy B: Look for name after "NOMBRE USUAL:" keyword
+  // ---- Strategy B: "NOMBRE USUAL:" keyword ----
   if (!data.fullName) {
     const nameUsualIdx = text.toUpperCase().indexOf('NOMBRE USUAL');
     if (nameUsualIdx !== -1) {
       const afterKeyword = text.substring(nameUsualIdx + 12).trim();
       const firstLine = afterKeyword.split('\n')[0]?.replace(/[^A-Za-záéíóúñÁÉÍÓÚÑ\s]/g, '').trim();
       if (firstLine && firstLine.length >= 3) {
-        data.fullName = formatName(firstLine);
-        console.log('[OCR-PA] Found name via NOMBRE USUAL:', data.fullName);
+        const nameWords = firstLine.split(/\s+/).filter(w => w.length >= 2 && !skipWordsSet.has(w.toUpperCase()));
+        if (nameWords.length >= 1) {
+          data.fullName = formatName(nameWords.join(' '));
+          console.log('[OCR-PA] Strategy B - NOMBRE USUAL:', data.fullName);
+        }
       }
-    }
-  }
-  
-  // Strategy C: Reconstruct from ALL CAPS name fragments after header
-  if (!data.fullName) {
-    const nameFragments: string[] = [];
-    let pastHeader = false;
-    
-    for (const line of lines) {
-      const upper = line.toUpperCase().trim();
-      
-      if (upper.includes('ELECTORAL') || upper.includes('TRIBUNAL')) {
-        pastHeader = true;
-        continue;
-      }
-      
-      if (upper.includes('NACIMIENTO') || upper.includes('FECHA') || 
-          upper.includes('EXPEDIDA') || upper.includes('SEXO') ||
-          upper.includes('TIPO DE SANGRE') || upper.includes('NOMBRE USUAL')) {
-        if (pastHeader) break;
-        continue;
-      }
-      
-      if (!pastHeader) continue;
-      
-      // Clean OCR artifacts
-      const cleaned = line.replace(/[~><=|\\\/\[\]{}()*#@!?.,;:0-9_\-"']/g, '').replace(/\s+/g, ' ').trim();
-      if (cleaned.length < 3) continue;
-      
-      const words = cleaned.split(/\s+/).filter(w => 
-        w.length >= 3 && /^[A-Za-záéíóúñÁÉÍÓÚÑ]+$/.test(w) && !skipWordsSet.has(w.toUpperCase())
-      );
-      
-      if (words.length > 0) nameFragments.push(...words);
-    }
-    
-    if (nameFragments.length >= 2) {
-      data.fullName = formatName(nameFragments.join(' '));
-      console.log('[OCR-PA] Reconstructed name:', data.fullName, 'fragments:', nameFragments);
     }
   }
 
-  // Strategy D: Brute force - find ANY line with 2+ consecutive alpha words ≥3 chars
+  // ---- Strategy C: Longest non-header, non-data alpha lines ----
   if (!data.fullName) {
+    const candidateLines: { text: string; score: number }[] = [];
     for (const line of lines) {
-      const cleaned = line.replace(/[^A-Za-záéíóúñÁÉÍÓÚÑ\s]/g, '').trim();
-      const words = cleaned.split(/\s+/).filter(w => w.length >= 3 && !skipWordsSet.has(w.toUpperCase()));
-      if (words.length >= 2 && words.length <= 5) {
-        data.fullName = formatName(words.join(' '));
-        console.log('[OCR-PA] Found name (brute force):', data.fullName);
-        break;
+      const upper = line.toUpperCase();
+      if (/\d{4}/.test(line)) continue;
+      if (upper.includes('REPUBLICA') || upper.includes('TRIBUNAL') || upper.includes('ELECTORAL')) continue;
+      if (upper.includes('NACIMIENTO') || upper.includes('EXPEDIDA') || upper.includes('EXPIRA')) continue;
+      if (upper.includes('NOMBRE USUAL') || upper.includes('SEXO') || upper.includes('SANGRE')) continue;
+      
+      const cleaned = line.replace(/[^A-Za-záéíóúñÁÉÍÓÚÑ\s]/g, '').replace(/\s+/g, ' ').trim();
+      const words = cleaned.split(/\s+/).filter(w => w.length >= 2 && !skipWordsSet.has(w.toUpperCase()));
+      if (words.length >= 1 && words.join(' ').length >= 4) {
+        candidateLines.push({ text: words.join(' '), score: words.join(' ').length });
       }
+    }
+    candidateLines.sort((a, b) => b.score - a.score);
+    
+    if (candidateLines.length >= 2) {
+      data.fullName = formatName(candidateLines.slice(0, 2).map(c => c.text).join(' '));
+      console.log('[OCR-PA] Strategy C - combined:', data.fullName);
+    } else if (candidateLines.length === 1 && candidateLines[0].score >= 5) {
+      data.fullName = formatName(candidateLines[0].text);
+      console.log('[OCR-PA] Strategy C - single:', data.fullName);
     }
   }
 
@@ -770,6 +801,34 @@ function parseColombianId(text: string, lines: string[], dates: string[]): Parti
 
   data.nationality = 'Colombiana';
   return data;
+}
+
+// Merge OCR-fragmented words: ["Mar", "garita", "Go", "mez"] → ["Margarita", "Gomez"]
+function mergeFragmentedWords(words: string[]): string[] {
+  if (words.length <= 1) return words;
+  
+  const merged: string[] = [];
+  let current = words[0];
+  
+  for (let i = 1; i < words.length; i++) {
+    const next = words[i];
+    // Merge if: current word is short (<4 chars) AND next starts lowercase
+    // OR current ends lowercase and next starts lowercase (broken word)
+    const currentEndsLower = /[a-záéíóúñ]$/.test(current);
+    const nextStartsLower = /^[a-záéíóúñ]/.test(next);
+    const currentShort = current.length <= 3;
+    
+    if ((currentShort && nextStartsLower) || (currentEndsLower && nextStartsLower)) {
+      current = current + next;
+    } else {
+      merged.push(current);
+      current = next;
+    }
+  }
+  merged.push(current);
+  
+  // Filter out very short results (single chars, noise)
+  return merged.filter(w => w.length >= 3);
 }
 
 function formatName(name: string): string {
