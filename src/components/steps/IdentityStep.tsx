@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, AlertCircle, User, CreditCard, Calendar, Loader2, Sparkles } from 'lucide-react';
+import { Check, AlertCircle, User, CreditCard, Calendar, Loader2, Sparkles, Edit3, Hash } from 'lucide-react';
 import { Button, Card, Badge, ProgressBar, ImageUploader, Alert } from '../ui';
 import { useInspectionStore } from '../../stores/inspectionStore';
 import { useOCR } from '../../hooks/useOCR';
@@ -16,17 +16,25 @@ export const IdentityStep: React.FC = () => {
     inspection.insuredPerson?.identity.backImage || null
   );
   const [isExtracting, setIsExtracting] = useState(false);
-  const [extractionComplete, setExtractionComplete] = useState(
+  const [extractionAttempted, setExtractionAttempted] = useState(
     !!(inspection.insuredPerson?.identity.extractedData)
   );
-  const [extractionError, setExtractionError] = useState<string | null>(null);
+  const [extractionSuccess, setExtractionSuccess] = useState(
+    !!(inspection.insuredPerson?.identity.extractedData?.fullName || 
+       inspection.insuredPerson?.identity.extractedData?.idNumber)
+  );
+  const [ocrRawText, setOcrRawText] = useState<string | null>(null);
+  const [showRawText, setShowRawText] = useState(false);
   
-  // Editable fields for OCR results
+  // Editable fields - always visible after images are uploaded
   const [fullName, setFullName] = useState(
     inspection.insuredPerson?.identity.extractedData?.fullName || ''
   );
   const [idNumber, setIdNumber] = useState(
     inspection.insuredPerson?.identity.extractedData?.idNumber || ''
+  );
+  const [birthDate, setBirthDate] = useState(
+    inspection.insuredPerson?.identity.extractedData?.birthDate || ''
   );
   const [expiryDate, setExpiryDate] = useState(
     inspection.insuredPerson?.identity.extractedData?.expiryDate || ''
@@ -37,33 +45,42 @@ export const IdentityStep: React.FC = () => {
 
   const handleFrontImage = (imageData: string) => {
     setFrontImage(imageData);
-    setExtractionComplete(false);
-    setExtractionError(null);
+    setExtractionAttempted(false);
+    setExtractionSuccess(false);
   };
 
   const handleBackImage = (imageData: string) => {
     setBackImage(imageData);
-    setExtractionComplete(false);
-    setExtractionError(null);
+    setExtractionAttempted(false);
+    setExtractionSuccess(false);
   };
 
-  // Manual extraction trigger
+  // OCR extraction
   const handleExtractData = async () => {
-    if (!frontImage || !backImage) return;
+    if (!frontImage) return;
     
     setIsExtracting(true);
-    setExtractionError(null);
+    setOcrRawText(null);
     
     try {
-      console.log('Starting OCR extraction...');
-      const result = await extractIdData(frontImage, backImage, inspection.country);
-      console.log('OCR Result:', result);
+      console.log('[IdentityStep] Starting OCR extraction...');
+      const result = await extractIdData(frontImage, backImage || undefined, inspection.country);
+      console.log('[IdentityStep] OCR Result:', result);
       
-      // Update editable fields with extracted data
-      if (result.data?.fullName) setFullName(result.data.fullName);
-      if (result.data?.idNumber) setIdNumber(result.data.idNumber);
-      if (result.data?.expiryDate) setExpiryDate(result.data.expiryDate);
+      setOcrRawText(result.rawText || null);
       
+      // Update fields with extracted data (only if we got something)
+      if (result.data) {
+        if (result.data.fullName) setFullName(result.data.fullName);
+        if (result.data.idNumber) setIdNumber(result.data.idNumber);
+        if (result.data.birthDate) setBirthDate(result.data.birthDate);
+        if (result.data.expiryDate) setExpiryDate(result.data.expiryDate);
+        setExtractionSuccess(true);
+      }
+      
+      setExtractionAttempted(true);
+      
+      // Save to store
       updateInsuredIdentity({
         frontImage,
         backImage,
@@ -72,29 +89,25 @@ export const IdentityStep: React.FC = () => {
         validated: result.confidence >= 0.7,
       });
       
-      setExtractionComplete(true);
-      
-      if (!result.data?.fullName && !result.data?.idNumber) {
-        setExtractionError('No se pudo extraer datos. Por favor ingresa los datos manualmente.');
-      }
     } catch (err) {
-      console.error('Error extracting data:', err);
-      setExtractionError('Error al procesar. Ingresa los datos manualmente.');
+      console.error('[IdentityStep] Error extracting data:', err);
+      setExtractionAttempted(true);
+      setExtractionSuccess(false);
     } finally {
       setIsExtracting(false);
     }
   };
 
   const handleContinue = () => {
-    // Save both images and manually entered/corrected data
+    // Save images and manually entered/corrected data
     updateInsuredIdentity({
       frontImage,
       backImage,
       extractedData: {
         fullName,
         idNumber,
+        birthDate,
         expiryDate,
-        birthDate: identityData?.extractedData?.birthDate || '',
         nationality: country?.name || '',
       },
       confidence: identityData?.confidence || 0.5,
@@ -103,14 +116,16 @@ export const IdentityStep: React.FC = () => {
     nextStep();
   };
 
-  const confidencePercent = Math.round((identityData?.confidence || 0) * 100);
+  const canContinue = frontImage && (fullName || idNumber);
+  const bothImagesLoaded = !!(frontImage && backImage);
+  const showExtractButton = (frontImage || backImage) && !isExtracting && !isProcessing;
 
   return (
     <div className="space-y-6 animate-slide-up">
-      {/* Instructions Alert */}
+      {/* Instructions */}
       <Alert variant="info" icon={<CreditCard className="w-5 h-5" />}>
         Sube una foto de tu <strong>{country?.idDocumentName || 'documento de identidad'}</strong> (frente y reverso).
-        La información se extraerá automáticamente.
+        La IA intentará extraer los datos. Si no lo logra, puedes ingresarlos manualmente.
       </Alert>
 
       {/* Upload Cards */}
@@ -160,15 +175,17 @@ export const IdentityStep: React.FC = () => {
         </Card>
       )}
 
-      {/* Extract Button - Show when both images are loaded but not yet processed */}
-      {frontImage && backImage && !extractionComplete && !isExtracting && !isProcessing && (
+      {/* Extract Button */}
+      {showExtractButton && !extractionSuccess && (
         <Card className="text-center animate-fade-in">
           <Sparkles className="w-10 h-10 text-primary-400 mx-auto mb-4" />
           <h3 className="text-lg font-semibold text-white mb-2">
-            ¡Fotos cargadas!
+            {bothImagesLoaded ? '¡Fotos cargadas!' : 'Foto cargada'}
           </h3>
           <p className="text-dark-400 mb-4">
-            Haz clic para extraer los datos automáticamente con IA
+            {bothImagesLoaded 
+              ? 'Haz clic para extraer los datos automáticamente con IA'
+              : 'Puedes subir la otra foto o extraer datos de la que ya tienes'}
           </p>
           <Button
             onClick={handleExtractData}
@@ -179,77 +196,139 @@ export const IdentityStep: React.FC = () => {
         </Card>
       )}
 
-      {/* Extraction Error */}
-      {extractionError && (
-        <Alert variant="warning" icon={<AlertCircle className="w-5 h-5" />}>
-          {extractionError}
-        </Alert>
-      )}
-
-      {/* Extracted Data Display */}
-      {extractionComplete && identityData?.extractedData && (
-        <Card className="animate-fade-in">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <div className={`p-2 rounded-full ${
-                identityData.validated ? 'bg-emerald-500' : 'bg-amber-500'
-              }`}>
-                <Check className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-white">
-                  Documento procesado con éxito
-                </h3>
-                <p className="text-sm text-dark-400">
-                  Verifica que la información sea correcta
-                </p>
-              </div>
-            </div>
-            <Badge variant={confidencePercent >= 80 ? 'success' : 'warning'}>
-              Confianza: {confidencePercent}%
-            </Badge>
-          </div>
-
-          {/* Extracted Fields */}
-          <div className="space-y-4">
-            <h4 className="text-sm font-medium text-dark-300">Datos detectados:</h4>
-            <div className="flex flex-wrap gap-3">
-              {identityData.extractedData.fullName && (
-                <Badge variant="info">
-                  <User className="w-3 h-3" />
-                  Nombre: {identityData.extractedData.fullName}
-                </Badge>
+      {/* OCR Success/Failure Feedback */}
+      {extractionAttempted && !isExtracting && (
+        <>
+          {extractionSuccess ? (
+            <Alert variant="success" icon={<Check className="w-5 h-5" />}>
+              Se extrajeron datos del documento. Verifica que sean correctos y corrige si es necesario.
+            </Alert>
+          ) : (
+            <Alert variant="warning" icon={<AlertCircle className="w-5 h-5" />}>
+              No se pudieron extraer datos automáticamente. Por favor ingresa los datos manualmente en los campos de abajo.
+              {ocrRawText && (
+                <button
+                  onClick={() => setShowRawText(!showRawText)}
+                  className="block mt-2 text-xs underline opacity-70 hover:opacity-100"
+                >
+                  {showRawText ? 'Ocultar texto detectado' : 'Ver texto detectado por OCR'}
+                </button>
               )}
-              {identityData.extractedData.idNumber && (
-                <Badge variant="info">
-                  <CreditCard className="w-3 h-3" />
-                  ID: {identityData.extractedData.idNumber}
-                </Badge>
-              )}
-              {identityData.extractedData.expiryDate && (
-                <Badge variant="info">
-                  <Calendar className="w-3 h-3" />
-                  Vence: {identityData.extractedData.expiryDate}
-                </Badge>
-              )}
-            </div>
-          </div>
-
-          {/* Low confidence warning */}
-          {confidencePercent < 80 && (
-            <Alert variant="warning" icon={<AlertCircle className="w-5 h-5" />} className="mt-4">
-              La precisión de la extracción es baja. Por favor verifica los datos manualmente
-              o intenta tomar una foto más clara del documento.
             </Alert>
           )}
-        </Card>
+
+          {/* Debug: Raw OCR text */}
+          {showRawText && ocrRawText && (
+            <Card>
+              <h4 className="text-sm font-medium text-dark-300 mb-2">Texto detectado por OCR:</h4>
+              <pre className="text-xs text-dark-400 whitespace-pre-wrap bg-dark-800 p-3 rounded-lg max-h-40 overflow-y-auto">
+                {ocrRawText}
+              </pre>
+            </Card>
+          )}
+        </>
       )}
 
       {/* OCR Error */}
       {ocrError && (
         <Alert variant="error" icon={<AlertCircle className="w-5 h-5" />}>
-          Error al procesar el documento: {ocrError}
+          Error al procesar: {ocrError}
         </Alert>
+      )}
+
+      {/* Editable Fields - ALWAYS visible when at least one image is loaded */}
+      {(frontImage || backImage) && !isExtracting && !isProcessing && (
+        <Card className="animate-fade-in">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="p-2 rounded-full bg-primary-500/20">
+              <Edit3 className="w-5 h-5 text-primary-400" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-white">
+                Datos del documento
+              </h3>
+              <p className="text-sm text-dark-400">
+                {extractionSuccess 
+                  ? 'Verifica y corrige los datos extraídos'
+                  : 'Ingresa los datos de tu documento de identidad'}
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {/* Full Name */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-dark-300 mb-1.5">
+                <User className="w-4 h-4" />
+                Nombre completo *
+              </label>
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Nombre y apellidos como aparecen en el documento"
+                className="w-full px-4 py-3 bg-dark-700 border border-dark-600 rounded-lg text-white placeholder-dark-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-colors"
+              />
+            </div>
+
+            {/* ID Number */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-dark-300 mb-1.5">
+                <Hash className="w-4 h-4" />
+                Número de {country?.idDocumentName || 'documento'} *
+              </label>
+              <input
+                type="text"
+                value={idNumber}
+                onChange={(e) => setIdNumber(e.target.value)}
+                placeholder={`Ej: ${country?.code === 'PA' ? '8-123-4567' : country?.code === 'CR' ? '1-1234-1234' : '123456789'}`}
+                className="w-full px-4 py-3 bg-dark-700 border border-dark-600 rounded-lg text-white placeholder-dark-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-colors"
+              />
+            </div>
+
+            {/* Birth Date */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-dark-300 mb-1.5">
+                <Calendar className="w-4 h-4" />
+                Fecha de nacimiento
+              </label>
+              <input
+                type="date"
+                value={birthDate}
+                onChange={(e) => setBirthDate(e.target.value)}
+                className="w-full px-4 py-3 bg-dark-700 border border-dark-600 rounded-lg text-white placeholder-dark-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-colors"
+              />
+            </div>
+
+            {/* Expiry Date */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-dark-300 mb-1.5">
+                <Calendar className="w-4 h-4" />
+                Fecha de vencimiento
+              </label>
+              <input
+                type="date"
+                value={expiryDate}
+                onChange={(e) => setExpiryDate(e.target.value)}
+                className="w-full px-4 py-3 bg-dark-700 border border-dark-600 rounded-lg text-white placeholder-dark-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-colors"
+              />
+            </div>
+          </div>
+
+          {/* Re-extract button if they already tried */}
+          {extractionAttempted && frontImage && (
+            <div className="mt-4 pt-4 border-t border-dark-600">
+              <button
+                onClick={handleExtractData}
+                className="text-sm text-primary-400 hover:text-primary-300 flex items-center gap-2 transition-colors"
+                disabled={isExtracting || isProcessing}
+              >
+                <Sparkles className="w-4 h-4" />
+                Reintentar extracción con IA
+              </button>
+            </div>
+          )}
+        </Card>
       )}
 
       {/* Navigation */}
@@ -260,9 +339,9 @@ export const IdentityStep: React.FC = () => {
         <Button
           fullWidth
           onClick={handleContinue}
-          disabled={!frontImage || !backImage || isProcessing || isExtracting}
+          disabled={!frontImage || isProcessing || isExtracting}
         >
-          {extractionComplete ? 'Continuar' : 'Continuar sin OCR'}
+          {canContinue ? 'Continuar' : 'Continuar sin datos'}
         </Button>
       </div>
     </div>
