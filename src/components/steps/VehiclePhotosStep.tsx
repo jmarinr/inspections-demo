@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, Check, Info, X, RotateCcw, Sparkles, Loader2, Car, Search, Hash, Palette, Calendar, Gauge, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Camera, Check, Info, RotateCcw, Sparkles, Loader2, Car, Search, Hash, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button, Card, Alert, Badge, ProgressBar } from '../ui';
 import { useInspectionStore } from '../../stores/inspectionStore';
 import { useVehicleOCR } from '../../hooks/useVehicleOCR';
@@ -124,7 +124,7 @@ const AnalysisItem: React.FC<AnalysisItemProps> = ({ icon, label, value, confide
 // ===== Main Component =====
 export const VehiclePhotosStep: React.FC = () => {
   const { inspection, updateVehiclePhoto, updateInsuredVehicle, nextStep, prevStep } = useInspectionStore();
-  const { isProcessing: isOCRProcessing, progress: ocrProgress, extractPlate, extractVIN } = useVehicleOCR();
+  const { progress: ocrProgress, extractPlate, extractVIN } = useVehicleOCR();
   
   const [analysisState, setAnalysisState] = useState<'idle' | 'running' | 'done'>('idle');
   const [analysisStep, setAnalysisStep] = useState('');
